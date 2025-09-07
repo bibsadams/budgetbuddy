@@ -1,12 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:fl_chart/fl_chart.dart';
+import 'package:fl_chart/fl_chart.dart'; // Add this in pubspec.yaml
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'dart:async';
-import 'features/report/report_tab.dart';
 import 'features/expenses/expenses_tab.dart';
-import 'features/savings/savings_tab.dart';
-import 'features/bills/bills_tab.dart';
 
 class HomeTabsPage extends StatefulWidget {
   const HomeTabsPage({super.key});
@@ -21,18 +18,27 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
   final Box box = Hive.box('budgetBox');
   List<String> tabs = [];
   Map<String, List<Map<String, dynamic>>> tableData = {};
-  Map<String, double> tabLimits = {};
-  Map<String, double> savingsGoals = {};
-  Map<String, List<String>> billReminders = {};
-  final Map<String, Color> _categoryColors = {};
+  Map<String, double> tabLimits = {}; // For Expenses
+  Map<String, double> savingsGoals = {}; // For Savings tab
+  Map<String, List<String>> billReminders =
+      {}; // For Bills tab: [Due Date, Description]
+  final Map<String, Color> _categoryColors = {}; // ← Add this line
   Timer? _billCheckTimer;
 
   void initializeNotifications() async {
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
+
     final InitializationSettings initializationSettings =
-        InitializationSettings(android: initializationSettingsAndroid);
-    await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+        InitializationSettings(
+          android: initializationSettingsAndroid,
+          // You can add iOS initialization here if needed
+        );
+
+    await flutterLocalNotificationsPlugin.initialize(
+      initializationSettings,
+      // Optional: onSelectNotification handler here
+    );
   }
 
   Future<void> checkExpenseThresholdNotification() async {
@@ -42,9 +48,10 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
       (sum, row) => sum + (row['Amount'] ?? 0.0),
     );
     final limit = tabLimits['Expenses'] ?? 0.0;
+
     if (limit > 0 && totalExpense >= limit * 0.75) {
       await flutterLocalNotificationsPlugin.show(
-        10000,
+        10000, // unique notification id for expense alert
         'Expense Limit Alert',
         'You have reached 75% or more of your expense limit!',
         const NotificationDetails(
@@ -63,15 +70,21 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
   void checkBillDueNotifications() async {
     final today = DateTime.now();
     final rows = tableData['Bills'] ?? [];
+
+    print("Checking for due bills...");
+
     for (var row in rows) {
       final dueDateStr = row['Due Date'];
       if (dueDateStr == null || dueDateStr.isEmpty) continue;
+
       final dueDate = DateTime.tryParse(dueDateStr);
       if (dueDate == null) continue;
+
+      // If today is 1 day before or same day as due date or overdue
       final daysUntilDue = dueDate.difference(today).inDays;
       if (daysUntilDue <= 7) {
         await flutterLocalNotificationsPlugin.show(
-          dueDate.hashCode,
+          dueDate.hashCode, // unique ID
           'Bill Due Soon',
           '${row['Name']} is due on ${row['Due Date']}',
           const NotificationDetails(
@@ -88,6 +101,34 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
     }
   }
 
+  // void checkExpenseThresholdNotification() async {
+  //   final totalExpenses =
+  //       tableData['Expenses']?.fold<double>(
+  //         0.0,
+  //         (sum, row) => sum + (row['Amount'] ?? 0.0),
+  //       ) ??
+  //       0.0;
+
+  //   final limit = tabLimits['Expenses'] ?? 0.0;
+
+  //   if (limit > 0 && totalExpenses >= 0.75 * limit) {
+  //     await flutterLocalNotificationsPlugin.show(
+  //       9999, // Unique ID for expense alert
+  //       'Expenses Alert',
+  //       'Your expenses have reached 75% of the set limit (₱${limit.toStringAsFixed(2)}).',
+  //       const NotificationDetails(
+  //         android: AndroidNotificationDetails(
+  //           'expenses_alert_channel',
+  //           'Expenses Alert',
+  //           channelDescription: 'Notifies when expenses hit 75% of the limit',
+  //           importance: Importance.high,
+  //           priority: Priority.high,
+  //         ),
+  //       ),
+  //     );
+  //   }
+  // }
+
   @override
   void dispose() {
     _billCheckTimer?.cancel();
@@ -97,9 +138,11 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
   @override
   void initState() {
     super.initState();
+
     tabs =
         (box.get('tabs') as List?)?.cast<String>() ??
         ['Expenses', 'Savings', 'Bills', 'Report'];
+
     final rawTableData = box.get('tableData') as Map?;
     tableData = {};
     if (rawTableData != null) {
@@ -113,6 +156,7 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
         tableData[key.toString()] = list ?? [];
       });
     }
+
     final rawTabLimits = box.get('tabLimits') as Map?;
     tabLimits = {};
     if (rawTabLimits != null) {
@@ -120,6 +164,7 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
         tabLimits[key.toString()] = value is num ? value.toDouble() : 0.0;
       });
     }
+
     final rawSavingsGoals = box.get('savingsGoals') as Map?;
     savingsGoals = {};
     if (rawSavingsGoals != null) {
@@ -127,6 +172,7 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
         savingsGoals[key.toString()] = value is num ? value.toDouble() : 0.0;
       });
     }
+
     final rawBillReminders = box.get('billReminders') as Map?;
     billReminders = {};
     if (rawBillReminders != null) {
@@ -134,12 +180,19 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
         billReminders[key.toString()] = (value as List?)?.cast<String>() ?? [];
       });
     }
+
+    // Ensure tableData contains a list for each tab
     for (var tab in tabs) {
       tableData.putIfAbsent(tab, () => []);
     }
+
     saveData();
+
+    // Initialize notifications
     initializeNotifications();
-    checkBillDueNotifications();
+
+    // Check bills and show notifications if due
+    checkBillDueNotifications(); // Run immediately on launch
     _billCheckTimer = Timer.periodic(
       const Duration(minutes: 3),
       (_) => checkBillDueNotifications(),
@@ -153,6 +206,7 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
     box.put('tabLimits', tabLimits);
     box.put('savingsGoals', savingsGoals);
     box.put('billReminders', billReminders);
+    // Check if expense threshold notification needs to be shown after saving
     checkExpenseThresholdNotification();
   }
 
@@ -181,84 +235,28 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
             ],
           ),
         ),
+
         body: TabBarView(
           children: [
             ...tabs.map((tab) {
-              if (tab == 'Report') {
-                return ReportTab(
-                  tableData: tableData,
-                  categoryColors: _categoryColors,
-                );
-              }
-              if (tab == 'Savings') {
-                return SavingsTab(
-                  rows: tableData['Savings'] ?? [],
-                  goal: savingsGoals['Savings'],
-                  onAddNewRow: (columns) => addNewRow('Savings', columns),
-                  onSetGoal: () {
-                    final ctrl = TextEditingController(
-                      text: savingsGoals['Savings']?.toString() ?? '',
-                    );
-                    showDialog(
-                      context: context,
-                      builder: (_) => AlertDialog(
-                        title: const Text("Set Goal"),
-                        content: TextField(
-                          controller: ctrl,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            hintText: "Enter savings goal",
-                          ),
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () {
-                              setState(() {
-                                savingsGoals['Savings'] =
-                                    double.tryParse(ctrl.text) ?? 0.0;
-                                saveData();
-                                Navigator.pop(context);
-                              });
-                            },
-                            child: const Text("Save"),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                  onAddColumn: () async {
-                    final newColName = await showAddColumnDialog();
-                    if (newColName != null &&
-                        newColName.isNotEmpty &&
-                        !(tableData['Savings']?[0].containsKey(newColName) ??
-                            false)) {
-                      setState(() {
-                        for (var row in tableData['Savings']!) {
-                          row[newColName] = "";
-                        }
-                        saveData();
-                      });
-                    }
-                    return null;
-                  },
-                  onDeleteRow: (rowIndex) {
+              if (tab == 'Report') return buildReportTab();
+              if (tab == 'Savings') return buildSavingsTab();
+              if (tab == 'Bills') return buildBillsTab();
+              if (tab == 'Expenses') {
+                final rows = tableData['Expenses'] ?? [];
+                final limit = tabLimits['Expenses'];
+                return ExpensesTab(
+                  rows: rows,
+                  limit: limit,
+                  onRowsChanged: (newRows) {
                     setState(() {
-                      tableData['Savings']!.removeAt(rowIndex);
+                      tableData['Expenses'] = newRows;
                       saveData();
                     });
                   },
-                  onEditValue: (currentValue) =>
-                      showEditValueDialog(currentValue),
-                );
-              }
-              if (tab == 'Expenses') {
-                return ExpensesTab(
-                  rows: tableData['Expenses'] ?? [],
-                  limit: tabLimits['Expenses'],
-                  onAddNewRow: (columns) => addNewRow('Expenses', columns),
                   onSetLimit: () {
                     final ctrl = TextEditingController(
-                      text: tabLimits['Expenses']?.toString() ?? '',
+                      text: (tabLimits['Expenses'] ?? 0.0).toString(),
                     );
                     showDialog(
                       context: context,
@@ -287,41 +285,6 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
                       ),
                     );
                   },
-                  onAddColumn: () async {
-                    final newColName = await showAddColumnDialog();
-                    if (newColName != null &&
-                        newColName.isNotEmpty &&
-                        !(tableData['Expenses']?[0].containsKey(newColName) ??
-                            false)) {
-                      setState(() {
-                        for (var row in tableData['Expenses']!) {
-                          row[newColName] = "";
-                        }
-                        saveData();
-                      });
-                    }
-                  },
-                  onDeleteRow: (rowIndex) {
-                    setState(() {
-                      tableData['Expenses']!.removeAt(rowIndex);
-                      saveData();
-                    });
-                  },
-                  onEditValue: (currentValue) =>
-                      showEditValueDialog(currentValue),
-                );
-              }
-              if (tab == 'Bills') {
-                return BillsTab(
-                  rows: tableData['Bills'] ?? [],
-                  onAddNewRow: (columns) => addNewRow('Bills', columns),
-                  onDeleteRow: (rowIndex) {
-                    setState(() {
-                      tableData['Bills']!.removeAt(rowIndex);
-                      saveData();
-                    });
-                  },
-                  onEditRow: null,
                 );
               }
               return buildTabContent(tab);
@@ -355,7 +318,186 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
     ).withOpacity(1.0);
   }
 
-  int touchedIndex = -1;
+  int touchedIndex = -1; // Add this in your _HomeTabsPageState
+
+  Widget buildReportTab() {
+    Map<String, double> categoryTotals = {};
+    final expenses = tableData['Expenses'] ?? [];
+
+    for (var row in expenses) {
+      String category = (row['Category'] ?? row['Name'] ?? 'Uncategorized')
+          .toString();
+      double amount = row['Amount'] ?? 0.0;
+      categoryTotals[category] = (categoryTotals[category] ?? 0) + amount;
+      _categoryColors.putIfAbsent(category, () => getRandomColor());
+    }
+
+    final entries = categoryTotals.entries.toList();
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            "Spending Insights",
+            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 16),
+          Expanded(
+            child: entries.isEmpty
+                ? const Center(child: Text("No expense data available."))
+                : Card(
+                    elevation: 4,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: PieChart(
+                        PieChartData(
+                          sectionsSpace: 4,
+                          centerSpaceRadius: 60,
+                          pieTouchData: PieTouchData(
+                            touchCallback: (event, response) {
+                              setState(() {
+                                touchedIndex =
+                                    response
+                                        ?.touchedSection
+                                        ?.touchedSectionIndex ??
+                                    -1;
+                              });
+                            },
+                          ),
+                          sections: List.generate(entries.length, (i) {
+                            final entry = entries[i];
+                            final isTouched = i == touchedIndex;
+                            final double fontSize = isTouched ? 16 : 12;
+                            final double radius = isTouched ? 90 : 70;
+
+                            return PieChartSectionData(
+                              value: entry.value,
+                              title: isTouched
+                                  ? "${entry.key}\n₱${entry.value.toStringAsFixed(0)}"
+                                  : '',
+                              color: _categoryColors[entry.key],
+                              radius: radius,
+                              titleStyle: TextStyle(
+                                fontSize: fontSize,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            );
+                          }),
+                        ),
+                      ),
+                    ),
+                  ),
+          ),
+          if (touchedIndex != -1)
+            Padding(
+              padding: const EdgeInsets.only(top: 16.0),
+              child: Center(
+                child: Text(
+                  "${entries[touchedIndex].key}: ₱${entries[touchedIndex].value.toStringAsFixed(2)}",
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildSavingsTab() {
+    final rows = tableData['Savings'] ?? [];
+    double savedTotal = rows.fold(
+      0.0,
+      (sum, row) => sum + (row['Amount'] ?? 0.0),
+    );
+    double goal = savingsGoals['Savings'] ?? 0.0;
+    double progress = goal > 0 ? (savedTotal / goal).clamp(0.0, 1.0) : 0.0;
+
+    // Declare progressColor only once here:
+    final Color progressColor = progress >= 1.0
+        ? Colors.green
+        : (progress > 0.75 ? Colors.yellow.shade700 : Colors.orange.shade300);
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("Goal Amount:"),
+                  ElevatedButton(
+                    onPressed: () {
+                      final ctrl = TextEditingController(text: goal.toString());
+                      showDialog(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          title: const Text("Set Savings Goal"),
+                          content: TextField(
+                            controller: ctrl,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              hintText: "Enter goal amount",
+                            ),
+                          ),
+                          actions: [
+                            ElevatedButton.icon(
+                              onPressed: () {
+                                setState(() {
+                                  savingsGoals['Savings'] =
+                                      double.tryParse(ctrl.text) ?? 0.0;
+                                  saveData();
+                                  Navigator.pop(context);
+                                });
+                              },
+                              icon: const Icon(Icons.check),
+                              label: const Text("Save"),
+                              style: ElevatedButton.styleFrom(
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                    child: const Text("Set Goal"),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+
+              // Use progressColor here - no re-declaration
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 24,
+                  backgroundColor: Colors.grey.shade300,
+                  valueColor: AlwaysStoppedAnimation<Color>(progressColor),
+                ),
+              ),
+
+              const SizedBox(height: 8),
+              Text(
+                "Saved: ₱${savedTotal.toStringAsFixed(2)} / ₱${goal.toStringAsFixed(2)}",
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+        ),
+        Expanded(child: buildTabContent('Savings')),
+      ],
+    );
+  }
 
   Widget buildBillsTab() {
     final rows = tableData['Bills'] ?? [];
@@ -364,12 +506,7 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
         Padding(
           padding: const EdgeInsets.all(8),
           child: ElevatedButton.icon(
-            onPressed: () => addNewRow('Bills', [
-              'Name',
-              'Amount',
-              'Due Date',
-              'Recurrence',
-            ]),
+            onPressed: () => addNewRow('Bills', ['Name', 'Amount', 'Due Date']),
             icon: const Icon(Icons.add_alert),
             label: const Text("Add Bill Reminder"),
             style: ElevatedButton.styleFrom(
@@ -390,12 +527,8 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
                 ),
                 trailing: IconButton(
                   icon: const Icon(Icons.edit),
-                  onPressed: () => addNewRow('Bills', [
-                    'Name',
-                    'Amount',
-                    'Due Date',
-                    'Recurrence',
-                  ]),
+                  onPressed: () =>
+                      addNewRow('Bills', ['Name', 'Amount', 'Due Date']),
                 ),
               );
             }).toList(),
@@ -424,6 +557,7 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
         ],
       ),
     );
+
     if (result != null && result.isNotEmpty && !tabs.contains(result)) {
       setState(() {
         tabs.add(result);
@@ -473,16 +607,16 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
   Widget buildTabContent(String tab) {
     List<Map<String, dynamic>> rows = tableData[tab] ?? [];
     bool isEmpty = rows.isEmpty;
+
     List<String> columns = ['Name', 'Amount', 'Date'];
-    if (tab == 'Bills' && !columns.contains('Recurrence')) {
-      columns.add('Recurrence');
-    }
+
     if (rows.isNotEmpty) {
       final existingCols = rows.expand((row) => row.keys).toSet();
       for (var col in existingCols) {
         if (!columns.contains(col)) columns.add(col);
       }
     }
+
     double total = rows.fold(0.0, (sum, row) => sum + (row['Amount'] ?? 0.0));
     double? limit = tabLimits[tab];
 
@@ -553,16 +687,21 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
             ],
           ),
         ),
-        ElevatedButton.icon(
-          onPressed: () => addNewRow(tab, columns),
-          icon: const Icon(Icons.add),
-          label: const Text('Add Record'),
-          style: ElevatedButton.styleFrom(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+
+        // ✅ "Add Record" button hidden for Expenses (use ExpensesTab FAB)
+        if (tab != 'Expenses')
+          ElevatedButton.icon(
+            onPressed: () => addNewRow(tab, columns),
+            icon: const Icon(Icons.add),
+            label: const Text('Add Record'),
+            style: ElevatedButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
           ),
-        ),
+
+        // ✅ Show message if table is empty
         Expanded(
           child: isEmpty
               ? const Center(
@@ -588,6 +727,7 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
                             ),
                           ),
                         ),
+                        // ➕ Add Column Button
                         DataColumn(
                           label: IconButton(
                             icon: const Icon(
@@ -614,13 +754,17 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
                           label: Icon(Icons.delete, color: Colors.redAccent),
                         ),
                       ],
+
                       rows: [
                         ...rows.asMap().entries.map((entry) {
                           final rowIndex = entry.key;
                           final row = entry.value;
+
+                          // Ensure all expected columns are present in the row
                           for (var col in columns) {
                             row.putIfAbsent(col, () => '');
                           }
+
                           return DataRow(
                             cells: [
                               ...columns.map((col) {
@@ -667,71 +811,6 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
                                           saveData();
                                         });
                                       }
-                                    } else if (col == 'Recurrence') {
-                                      final val = await showDialog<String>(
-                                        context: context,
-                                        builder: (_) {
-                                          String selected = row[col] ?? 'None';
-                                          return AlertDialog(
-                                            title: const Text(
-                                              'Select Recurrence',
-                                            ),
-                                            content: StatefulBuilder(
-                                              builder: (context, setStateDropdown) {
-                                                return DropdownButton<String>(
-                                                  value: selected,
-                                                  isExpanded: true,
-                                                  items:
-                                                      [
-                                                            'None',
-                                                            'Monthly',
-                                                            'Yearly',
-                                                          ]
-                                                          .map(
-                                                            (option) =>
-                                                                DropdownMenuItem(
-                                                                  value: option,
-                                                                  child: Text(
-                                                                    option,
-                                                                  ),
-                                                                ),
-                                                          )
-                                                          .toList(),
-                                                  onChanged: (value) {
-                                                    if (value != null) {
-                                                      setStateDropdown(
-                                                        () => selected = value,
-                                                      );
-                                                    }
-                                                  },
-                                                );
-                                              },
-                                            ),
-                                            actions: [
-                                              TextButton(
-                                                onPressed: () => Navigator.pop(
-                                                  context,
-                                                  null,
-                                                ),
-                                                child: const Text("Cancel"),
-                                              ),
-                                              ElevatedButton(
-                                                onPressed: () => Navigator.pop(
-                                                  context,
-                                                  selected,
-                                                ),
-                                                child: const Text("OK"),
-                                              ),
-                                            ],
-                                          );
-                                        },
-                                      );
-                                      if (val != null) {
-                                        setState(() {
-                                          row[col] = val;
-                                          saveData();
-                                        });
-                                      }
                                     } else {
                                       final val = await showEditValueDialog(
                                         row[col],
@@ -748,7 +827,9 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
                                   },
                                 );
                               }),
-                              const DataCell(SizedBox()),
+                              const DataCell(
+                                SizedBox(),
+                              ), // <-- This empty cell for the Add Column button
                               DataCell(
                                 IconButton(
                                   icon: const Icon(
@@ -835,7 +916,10 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
     final controllers = <String, TextEditingController>{
       for (var col in columns) col: TextEditingController(),
     };
+
     final now = DateTime.now();
+
+    // Autofill both 'Date' and 'Due Date' if present
     if (columns.contains('Date')) {
       controllers['Date']?.text =
           "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
@@ -844,6 +928,7 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
       controllers['Due Date']?.text =
           "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
     }
+
     final result = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -852,75 +937,34 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: columns.map((col) {
-              if (tab == 'Bills' && col == 'Recurrence') {
-                final recurrenceOptions = [
-                  'None',
-                  'Daily',
-                  'Weekly',
-                  'Monthly',
-                  'Yearly',
-                ];
-                String selectedValue = controllers[col]?.text.isNotEmpty == true
-                    ? controllers[col]!.text
-                    : 'None';
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: InputDecorator(
-                    decoration: InputDecoration(
-                      labelText: 'Recurrence',
-                      border: OutlineInputBorder(),
-                    ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: selectedValue,
-                        isDense: true,
-                        onChanged: (value) {
-                          setState(() {
-                            controllers[col]?.text = value ?? 'None';
-                          });
-                        },
-                        items: recurrenceOptions
-                            .map(
-                              (option) => DropdownMenuItem(
-                                value: option,
-                                child: Text(option),
-                              ),
-                            )
-                            .toList(),
-                      ),
-                    ),
-                  ),
-                );
-              } else {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: TextField(
-                    controller: controllers[col],
-                    keyboardType: col == 'Amount'
-                        ? TextInputType.numberWithOptions(decimal: true)
-                        : TextInputType.text,
-                    readOnly: col == 'Date' || col == 'Due Date',
-                    onTap: (col == 'Date' || col == 'Due Date')
-                        ? () async {
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: DateTime.now(),
-                              firstDate: DateTime(2000),
-                              lastDate: DateTime(2100),
-                            );
-                            if (picked != null) {
-                              controllers[col]?.text =
-                                  "${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}";
-                            }
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: TextField(
+                  controller: controllers[col],
+                  keyboardType: col == 'Amount'
+                      ? const TextInputType.numberWithOptions(decimal: true)
+                      : TextInputType.text,
+                  readOnly: col == 'Date' || col == 'Due Date',
+                  onTap: (col == 'Date' || col == 'Due Date')
+                      ? () async {
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: DateTime.now(),
+                            firstDate: DateTime(2000),
+                            lastDate: DateTime(2100),
+                          );
+                          if (picked != null) {
+                            controllers[col]?.text =
+                                "${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}";
                           }
-                        : null,
-                    decoration: InputDecoration(
-                      labelText: col,
-                      border: OutlineInputBorder(),
-                    ),
+                        }
+                      : null,
+                  decoration: InputDecoration(
+                    labelText: col,
+                    border: const OutlineInputBorder(),
                   ),
-                );
-              }
+                ),
+              );
             }).toList(),
           ),
         ),
@@ -942,6 +986,7 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
         ],
       ),
     );
+
     if (result == true) {
       final newRow = <String, dynamic>{};
       for (var col in columns) {
@@ -957,3 +1002,5 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
     }
   }
 }
+
+// Deprecated: Removed top-tab UI. This file is intentionally left empty.
