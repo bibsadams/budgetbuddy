@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:fl_chart/fl_chart.dart';
 
@@ -21,72 +20,43 @@ Color _colorForKey(BuildContext context, String key) {
 }
 
 class HomeTab extends StatefulWidget {
-  const HomeTab({super.key});
+  final Map<String, List<Map<String, dynamic>>> tableData;
+  final Map<String, double> tabLimits;
+  final Map<String, double> savingsGoals;
+
+  const HomeTab({
+    super.key,
+    required this.tableData,
+    required this.tabLimits,
+    required this.savingsGoals,
+  });
 
   @override
   State<HomeTab> createState() => _HomeTabState();
 }
 
 class _HomeTabState extends State<HomeTab> {
-  final Box box = Hive.box('budgetBox');
   DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month);
   ChartMode _chartMode = ChartMode.bar;
-
-  Map<String, List<Map<String, dynamic>>> tableData = {};
-  Map<String, double> tabLimits = {};
-  Map<String, double> savingsGoals = {};
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  void _load() {
-    final rawTableData = box.get('tableData') as Map?;
-    tableData = {};
-    if (rawTableData != null) {
-      rawTableData.forEach((key, value) {
-        final list = (value as List?)?.map<Map<String, dynamic>>((item) {
-          if (item is Map) {
-            return item.map((k, v) => MapEntry(k.toString(), v));
-          }
-          return {};
-        }).toList();
-        tableData[key.toString()] = list ?? [];
-      });
-    }
-    final rawTabLimits = box.get('tabLimits') as Map?;
-    tabLimits = {};
-    rawTabLimits?.forEach(
-      (k, v) => tabLimits[k.toString()] = (v as num).toDouble(),
-    );
-    final rawSavingsGoals = box.get('savingsGoals') as Map?;
-    savingsGoals = {};
-    rawSavingsGoals?.forEach(
-      (k, v) => savingsGoals[k.toString()] = (v as num).toDouble(),
-    );
-    setState(() {});
-  }
 
   @override
   Widget build(BuildContext context) {
     final monthLabel = DateFormat.yMMM().format(_selectedMonth);
-    final expenses = (tableData['Expenses'] ?? []).where((row) {
+    final expenses = (widget.tableData['Expenses'] ?? []).where((row) {
       final d = DateTime.tryParse((row['Date'] ?? '').toString());
       return d != null &&
           d.year == _selectedMonth.year &&
           d.month == _selectedMonth.month;
     }).toList();
-    final savings = tableData['Savings'] ?? [];
-    final bills = tableData['Bills'] ?? [];
+    final savings = widget.tableData['Savings'] ?? [];
+    final bills = widget.tableData['Bills'] ?? [];
 
     final totalExpense = expenses.fold<double>(
       0.0,
       (s, r) => s + ((r['Amount'] ?? 0.0) as num).toDouble(),
     );
-    final expenseLimit = tabLimits['Expenses'] ?? 0.0;
-    final goal = savingsGoals['Savings'] ?? 0.0;
+    final expenseLimit = widget.tabLimits['Expenses'] ?? 0.0;
+    final goal = widget.savingsGoals['Savings'] ?? 0.0;
     final savedTotal = savings.fold<double>(
       0.0,
       (s, r) => s + ((r['Amount'] ?? 0.0) as num).toDouble(),

@@ -3,6 +3,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:hive/hive.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'dart:io';
 
 class ExpensesTab extends StatelessWidget {
   final List<Map<String, dynamic>> rows;
@@ -119,7 +120,13 @@ class ExpensesTab extends StatelessWidget {
                 expense: row,
                 onEdit: (updatedExpense) {
                   final newRows = List<Map<String, dynamic>>.from(rows);
-                  newRows[index] = updatedExpense;
+                  // Preserve existing fields like 'id' and LocalReceiptPath when editing
+                  newRows[index] = {
+                    ...row,
+                    ...updatedExpense,
+                    // ensure the stable id is kept for proper updates/persistence
+                    'id': row['id'] ?? updatedExpense['id'],
+                  };
                   onRowsChanged(newRows);
                   Navigator.pop(context);
                 },
@@ -160,7 +167,13 @@ class ExpensesTab extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      (row['Category'] ?? 'No Category').toString(),
+                      [
+                        (row['Category'] ?? 'No Category').toString(),
+                        if (((row['Subcategory'] ?? '') as String)
+                            .trim()
+                            .isNotEmpty)
+                          (row['Subcategory'] as String),
+                      ].join(' • '),
                       style: Theme.of(context).textTheme.titleMedium!.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -204,19 +217,54 @@ class ExpensesTab extends StatelessWidget {
               const SizedBox(width: 12),
               ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: row['Receipt'] != null
-                    ? Image.memory(
-                        row['Receipt'] as Uint8List,
+                child:
+                    (row['LocalReceiptPath'] != null &&
+                        (row['LocalReceiptPath'] as String).isNotEmpty)
+                    ? Image.file(
+                        File(row['LocalReceiptPath'] as String),
                         width: 64,
                         height: 64,
                         fit: BoxFit.cover,
+                        errorBuilder: (c, e, s) => Container(
+                          width: 64,
+                          height: 64,
+                          color: Colors.grey[200],
+                          child: const Icon(Icons.broken_image, size: 28),
+                        ),
                       )
-                    : Container(
+                    : (row['ReceiptUrl'] != null &&
+                          (row['ReceiptUrl'] as String).isNotEmpty)
+                    ? Image.network(
+                        row['ReceiptUrl'] as String,
                         width: 64,
                         height: 64,
-                        color: Colors.grey[200],
-                        child: const Icon(Icons.receipt_long, size: 28),
-                      ),
+                        fit: BoxFit.cover,
+                        errorBuilder: (c, e, s) => Container(
+                          width: 64,
+                          height: 64,
+                          color: Colors.grey[200],
+                          child: const Icon(Icons.broken_image, size: 28),
+                        ),
+                      )
+                    : (row['Receipt'] != null
+                          ? Image.memory(
+                              row['Receipt'] as Uint8List,
+                              width: 64,
+                              height: 64,
+                              fit: BoxFit.cover,
+                              errorBuilder: (c, e, s) => Container(
+                                width: 64,
+                                height: 64,
+                                color: Colors.grey[200],
+                                child: const Icon(Icons.broken_image, size: 28),
+                              ),
+                            )
+                          : Container(
+                              width: 64,
+                              height: 64,
+                              color: Colors.grey[200],
+                              child: const Icon(Icons.receipt_long, size: 28),
+                            )),
               ),
             ],
           ),
@@ -389,7 +437,7 @@ class ExpenseDetailsPage extends StatelessWidget {
           ),
         ],
       ),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -399,7 +447,17 @@ class ExpenseDetailsPage extends StatelessWidget {
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 24),
-            _buildDetailRow('Category', expense['Category'] ?? ''),
+            _buildDetailRow(
+              'Category',
+              [
+                (expense['Category'] ?? '').toString(),
+                if (((expense['Subcategory'] ?? '') as String)
+                    .toString()
+                    .trim()
+                    .isNotEmpty)
+                  (expense['Subcategory']).toString(),
+              ].where((e) => e.isNotEmpty).join(' • '),
+            ),
             _buildDetailRow(
               'Amount',
               '₱${(expense['Amount'] ?? 0.0).toStringAsFixed(2)}',
@@ -407,18 +465,47 @@ class ExpenseDetailsPage extends StatelessWidget {
             _buildDetailRow('Date', expense['Date'] ?? ''),
             _buildDetailRow('Note', expense['Note'] ?? ''),
             const SizedBox(height: 32),
-            if (expense['Receipt'] != null)
-              Center(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: Image.memory(
-                    expense['Receipt'],
-                    width: MediaQuery.of(context).size.width * 0.9,
-                    height: MediaQuery.of(context).size.height * 0.5,
-                    fit: BoxFit.contain,
-                  ),
-                ),
+            Center(
+              child: Builder(
+                builder: (context) {
+                  final localPath =
+                      (expense['LocalReceiptPath'] ?? '') as String;
+                  final url = (expense['ReceiptUrl'] ?? '') as String;
+                  if (localPath.isNotEmpty) {
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.file(
+                        File(localPath),
+                        width: MediaQuery.of(context).size.width * 0.9,
+                        height: MediaQuery.of(context).size.height * 0.5,
+                        fit: BoxFit.contain,
+                      ),
+                    );
+                  } else if (url.isNotEmpty) {
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.network(
+                        url,
+                        width: MediaQuery.of(context).size.width * 0.9,
+                        height: MediaQuery.of(context).size.height * 0.5,
+                        fit: BoxFit.contain,
+                      ),
+                    );
+                  } else if (expense['Receipt'] != null) {
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.memory(
+                        expense['Receipt'],
+                        width: MediaQuery.of(context).size.width * 0.9,
+                        height: MediaQuery.of(context).size.height * 0.5,
+                        fit: BoxFit.contain,
+                      ),
+                    );
+                  }
+                  return const SizedBox.shrink();
+                },
               ),
+            ),
           ],
         ),
       ),
@@ -472,11 +559,7 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
   final box = Hive.box('budgetBox');
   final NumberFormat _decimalFmt = NumberFormat.decimalPattern();
 
-  bool get _canSave {
-    final raw = amountController.text.replaceAll(',', '').trim();
-    final val = double.tryParse(raw) ?? 0.0;
-    return (selectedCategory != null && val > 0);
-  }
+  // Validation is handled in _handleSaveTap to also show SnackBar reasons.
 
   @override
   void initState() {
@@ -718,6 +801,7 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
         : [];
 
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
         title: Text(
           widget.expense['Category'] == '' ? 'Add Expense' : 'Edit Expense',
@@ -726,34 +810,24 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
           IconButton(
             icon: const Icon(Icons.save),
             tooltip: 'Save',
-            onPressed: _canSave
-                ? () {
-                    final updatedExpense = {
-                      'Category': selectedCategory ?? '',
-                      'Subcategory': selectedSubcategory ?? '',
-                      'Amount':
-                          double.tryParse(
-                            amountController.text.replaceAll(',', ''),
-                          ) ??
-                          0.0,
-                      'Date': dateController.text,
-                      'Note': noteController.text,
-                      'Receipt': receipt,
-                    };
-                    Navigator.pop(context, updatedExpense);
-                  }
-                : null,
+            onPressed: _handleSaveTap,
           ),
         ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
+        padding: EdgeInsets.fromLTRB(
+          24,
+          24,
+          24,
+          24 + MediaQuery.of(context).viewInsets.bottom,
+        ),
         child: Column(
           children: [
             Row(
               children: [
                 Expanded(
                   child: DropdownButtonFormField<String>(
+                    isExpanded: true,
                     value: selectedCategory,
                     decoration: const InputDecoration(
                       labelText: 'Category',
@@ -788,6 +862,7 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                 children: [
                   Expanded(
                     child: DropdownButtonFormField<String>(
+                      isExpanded: true,
                       value: subcategories.contains(selectedSubcategory)
                           ? selectedSubcategory
                           : null,
@@ -821,6 +896,18 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                   ),
                 ],
               ),
+              if (selectedSubcategory == null ||
+                  (selectedSubcategory?.trim().isEmpty ?? true))
+                const Padding(
+                  padding: EdgeInsets.only(top: 8.0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Subcategory is required',
+                      style: TextStyle(color: Colors.red),
+                    ),
+                  ),
+                ),
               const SizedBox(height: 20),
             ],
             TextField(
@@ -837,6 +924,19 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                 border: OutlineInputBorder(),
               ),
             ),
+            if ((double.tryParse(amountController.text.replaceAll(',', '')) ??
+                    0.0) <=
+                0.0)
+              const Padding(
+                padding: EdgeInsets.only(top: 8.0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Amount must be greater than 0',
+                    style: TextStyle(color: Colors.red),
+                  ),
+                ),
+              ),
 
             const SizedBox(height: 20),
             TextField(
@@ -874,9 +974,17 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                   width: MediaQuery.of(context).size.width * 0.9,
                   height: MediaQuery.of(context).size.height * 0.4,
                   fit: BoxFit.cover,
+                  errorBuilder: (c, e, s) => Container(
+                    width: MediaQuery.of(context).size.width * 0.9,
+                    height: MediaQuery.of(context).size.height * 0.4,
+                    color: Colors.grey[200],
+                    child: const Icon(Icons.broken_image, size: 48),
+                  ),
                 ),
               ),
-            Row(
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
               children: [
                 ElevatedButton.icon(
                   onPressed: _showImageSourceSheet,
@@ -885,7 +993,6 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                     receipt == null ? 'Attach Receipt' : 'Change Receipt',
                   ),
                 ),
-                const SizedBox(width: 12),
                 if (receipt != null)
                   OutlinedButton.icon(
                     onPressed: () => setState(() => receipt = null),
@@ -906,28 +1013,43 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
               borderRadius: BorderRadius.circular(16),
             ),
           ),
-          onPressed: _canSave
-              ? () {
-                  final updatedExpense = {
-                    'Category': selectedCategory ?? '',
-                    'Subcategory': selectedSubcategory ?? '',
-                    'Amount':
-                        double.tryParse(
-                          amountController.text.replaceAll(',', ''),
-                        ) ??
-                        0.0,
-                    'Date': dateController.text,
-                    'Note': noteController.text,
-                    'Receipt': receipt,
-                  };
-                  Navigator.pop(context, updatedExpense);
-                }
-              : null,
+          onPressed: _handleSaveTap,
           icon: const Icon(Icons.save),
           label: const Text("Save Expense"),
         ),
       ),
     );
+  }
+
+  void _handleSaveTap() {
+    final raw = amountController.text.replaceAll(',', '').trim();
+    final amountVal = double.tryParse(raw) ?? 0.0;
+    final missing = <String>[];
+    if (selectedCategory == null) missing.add('Category');
+    if (selectedSubcategory == null ||
+        (selectedSubcategory?.trim().isEmpty ?? true)) {
+      missing.add('Subcategory');
+    }
+    if (amountVal <= 0) missing.add('Amount > 0');
+
+    if (missing.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please complete: ${missing.join(' • ')}')),
+      );
+      return;
+    }
+
+    final updatedExpense = {
+      'Category': selectedCategory ?? '',
+      'Subcategory': selectedSubcategory ?? '',
+      'Amount': amountVal,
+      'Date': dateController.text,
+      'Note': noteController.text,
+      'Receipt': receipt,
+      // Bubble through any existing id so the caller updates in place
+      'id': widget.expense['id'],
+    };
+    Navigator.pop(context, updatedExpense);
   }
 }
 

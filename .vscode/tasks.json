@@ -1,0 +1,18 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Flutter Analyze BudgetBuddy",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"analyze",
+				"--no-pub"
+			],
+			"problemMatcher": [
+				"$dart-build_runner"
+			],
+			"group": "build"
+		}
+	]
+}

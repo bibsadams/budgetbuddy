@@ -3,9 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'dart:io';
 
-class SavingsTab extends StatelessWidget {
+class SavingsTab extends StatefulWidget {
   final List<Map<String, dynamic>> rows;
+  final List<Map<String, dynamic>> expensesRows;
   final double? goal;
   final void Function(List<Map<String, dynamic>> newRows) onRowsChanged;
   final VoidCallback? onSetGoal;
@@ -13,36 +15,230 @@ class SavingsTab extends StatelessWidget {
   const SavingsTab({
     super.key,
     required this.rows,
+    required this.expensesRows,
     required this.goal,
     required this.onRowsChanged,
     required this.onSetGoal,
   });
 
   @override
+  State<SavingsTab> createState() => _SavingsTabState();
+}
+
+class _SavingsTabState extends State<SavingsTab> {
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _query = '';
+  String _sort = 'Date (newest)';
+  bool _showAllAgg = false;
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  List<Map<String, dynamic>> _filteredAndSorted() {
+    final q = _query.trim().toLowerCase();
+    List<Map<String, dynamic>> list = widget.rows.where((r) {
+      if (q.isEmpty) return true;
+      final cat = (r['Category'] ?? '').toString().toLowerCase();
+      final sub = (r['Subcategory'] ?? '').toString().toLowerCase();
+      final note = (r['Note'] ?? '').toString().toLowerCase();
+      final date = (r['Date'] ?? '').toString().toLowerCase();
+      return cat.contains(q) ||
+          sub.contains(q) ||
+          note.contains(q) ||
+          date.contains(q);
+    }).toList();
+
+    int cmpNum(num a, num b) => a.compareTo(b);
+    int cmpDate(String a, String b) {
+      final da = DateTime.tryParse(a);
+      final db = DateTime.tryParse(b);
+      if (da == null && db == null) return 0;
+      if (da == null) return 1;
+      if (db == null) return -1;
+      return da.compareTo(db);
+    }
+
+    switch (_sort) {
+      case 'Amount (high → low)':
+        list.sort(
+          (a, b) =>
+              cmpNum((b['Amount'] ?? 0) as num, (a['Amount'] ?? 0) as num),
+        );
+        break;
+      case 'Amount (low → high)':
+        list.sort(
+          (a, b) =>
+              cmpNum((a['Amount'] ?? 0) as num, (b['Amount'] ?? 0) as num),
+        );
+        break;
+      case 'Category (A → Z)':
+        list.sort(
+          (a, b) => ((a['Category'] ?? '') as String).compareTo(
+            (b['Category'] ?? '') as String,
+          ),
+        );
+        break;
+      case 'Date (oldest)':
+        list.sort(
+          (a, b) =>
+              cmpDate((a['Date'] ?? '') as String, (b['Date'] ?? '') as String),
+        );
+        break;
+      case 'Date (newest)':
+      default:
+        list.sort(
+          (a, b) =>
+              cmpDate((b['Date'] ?? '') as String, (a['Date'] ?? '') as String),
+        );
+    }
+    return list;
+  }
+
+  // Finalized thresholds:
+  // Goal bar colors: green >=100%, amber 50–99%, red <50%.
+  Color _goalColor(double progress) {
+    if (progress >= 1.0) return Colors.green;
+    if (progress >= 0.5) return Colors.amber;
+    return Colors.red;
+  }
+
+  // Net savings colors: green >= 0; amber between -10% and 0 of goal; red < -10% of goal.
+  Color _netColor({required double net, required double goal}) {
+    if (net >= 0) return Colors.green;
+    if (goal > 0) {
+      final threshold = -0.1 * goal;
+      if (net >= threshold) return Colors.amber;
+      return Colors.red;
+    }
+    // No goal set: use red for negatives
+    return Colors.red;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final currency = NumberFormat.currency(symbol: '₱', decimalDigits: 2);
+    final rows = widget.rows;
+    final expensesRows = widget.expensesRows;
     final totalSaved = rows.fold<double>(
       0.0,
       (sum, row) =>
           sum + (row['Amount'] is num ? (row['Amount'] as num).toDouble() : 0),
     );
-    final goalVal = goal ?? 0.0;
-    final progress = goalVal > 0 ? (totalSaved / goalVal).clamp(0.0, 1.0) : 0.0;
-    final remaining = (goalVal - totalSaved).clamp(0.0, double.infinity);
-    final remainingRatio = goalVal > 0 ? (remaining / goalVal) : 1.0;
+    final totalExpenses = expensesRows.fold<double>(
+      0.0,
+      (sum, row) =>
+          sum + (row['Amount'] is num ? (row['Amount'] as num).toDouble() : 0),
+    );
+    final netSavedRaw = (totalSaved - totalExpenses);
+    final goalVal = widget.goal ?? 0.0;
+    final progressGoal = goalVal > 0
+        ? (totalSaved / goalVal).clamp(0.0, 1.0)
+        : 0.0;
+    final remainingGoalRatio = goalVal > 0
+        ? ((goalVal - totalSaved).clamp(0.0, goalVal) / goalVal)
+        : 1.0;
+    // Represent net savings progress relative to goal when available; clamp to [0,1] for progress bar.
+    final progressNet = goalVal > 0
+        ? (netSavedRaw / goalVal).clamp(0.0, 1.0)
+        : (totalSaved > 0 ? (netSavedRaw / totalSaved).clamp(0.0, 1.0) : 0.0);
 
     return Scaffold(
       body: CustomScrollView(
         slivers: [
+          // Goal section
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: _SavingsSummaryHeader(
+              child: _GoalSection(
+                goalLabel: widget.goal != null
+                    ? currency.format(goalVal)
+                    : null,
+                progress: progressGoal,
+                remainingRatio: remainingGoalRatio,
+                onSetGoal: widget.onSetGoal,
+                color: _goalColor(progressGoal),
+              ),
+            ),
+          ),
+          // Net savings section
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: _NetSavingsSection(
+                netLabel: currency.format(netSavedRaw),
                 totalLabel: currency.format(totalSaved),
-                goalLabel: goal != null ? currency.format(goalVal) : null,
-                progress: progress,
-                remainingRatio: remainingRatio,
-                onSetGoal: onSetGoal,
+                expensesLabel: currency.format(totalExpenses),
+                progress: progressNet,
+                color: _netColor(net: netSavedRaw, goal: goalVal),
+              ),
+            ),
+          ),
+          // Aggregation (Savings by subcategory)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _AggregationSection(
+                rows: rows,
+                showAll: _showAllAgg,
+                onToggle: () => setState(() => _showAllAgg = !_showAllAgg),
+                currency: currency,
+              ),
+            ),
+          ),
+          const SliverToBoxAdapter(child: SizedBox(height: 8)),
+          // Search + sort controls
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _searchCtrl,
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search),
+                        hintText: 'Search savings…',
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (v) => setState(() => _query = v),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  PopupMenuButton<String>(
+                    tooltip: 'Sort',
+                    onSelected: (v) => setState(() => _sort = v),
+                    itemBuilder: (ctx) => const [
+                      PopupMenuItem(
+                        value: 'Date (newest)',
+                        child: Text('Date (newest)'),
+                      ),
+                      PopupMenuItem(
+                        value: 'Date (oldest)',
+                        child: Text('Date (oldest)'),
+                      ),
+                      PopupMenuItem(
+                        value: 'Amount (high → low)',
+                        child: Text('Amount (high → low)'),
+                      ),
+                      PopupMenuItem(
+                        value: 'Amount (low → high)',
+                        child: Text('Amount (low → high)'),
+                      ),
+                      PopupMenuItem(
+                        value: 'Category (A → Z)',
+                        child: Text('Category (A → Z)'),
+                      ),
+                    ],
+                    child: OutlinedButton.icon(
+                      onPressed: null,
+                      icon: const Icon(Icons.sort),
+                      label: Text(_sort),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -58,9 +254,11 @@ class SavingsTab extends StatelessWidget {
             )
           else
             SliverList.builder(
-              itemCount: rows.length,
+              itemCount: _filteredAndSorted().length,
               itemBuilder: (context, index) {
-                final row = rows[index];
+                final displayRows = _filteredAndSorted();
+                final row = displayRows[index];
+                final originalIndex = _findOriginalIndex(rows, row);
                 return _SavingCard(
                   row: row,
                   onTap: () {
@@ -73,16 +271,25 @@ class SavingsTab extends StatelessWidget {
                             final newRows = List<Map<String, dynamic>>.from(
                               rows,
                             );
-                            newRows[index] = updatedSaving;
-                            onRowsChanged(newRows);
+                            if (originalIndex >= 0) {
+                              newRows[originalIndex] = {
+                                ...rows[originalIndex],
+                                ...updatedSaving,
+                                'id':
+                                    rows[originalIndex]['id'] ??
+                                    updatedSaving['id'],
+                              };
+                            }
+                            widget.onRowsChanged(newRows);
                             Navigator.pop(context);
                           },
                           onDelete: () {
                             final newRows = List<Map<String, dynamic>>.from(
                               rows,
                             );
-                            newRows.removeAt(index);
-                            onRowsChanged(newRows);
+                            if (originalIndex >= 0)
+                              newRows.removeAt(originalIndex);
+                            widget.onRowsChanged(newRows);
                             Navigator.pop(context);
                           },
                         ),
@@ -119,12 +326,34 @@ class SavingsTab extends StatelessWidget {
           if (newSaving != null) {
             final newRows = List<Map<String, dynamic>>.from(rows);
             newRows.add(newSaving);
-            onRowsChanged(newRows);
+            widget.onRowsChanged(newRows);
           }
         },
         icon: const Icon(Icons.add),
         label: const Text("Add Saving"),
       ),
+    );
+  }
+
+  int _findOriginalIndex(
+    List<Map<String, dynamic>> rows,
+    Map<String, dynamic> row,
+  ) {
+    final id = row['id'];
+    if (id != null) {
+      final idx = rows.indexWhere((r) => r['id'] == id);
+      if (idx >= 0) return idx;
+    }
+    // fallback by identity or content
+    final idx2 = rows.indexOf(row);
+    if (idx2 >= 0) return idx2;
+    return rows.indexWhere(
+      (r) =>
+          r['Category'] == row['Category'] &&
+          r['Subcategory'] == row['Subcategory'] &&
+          r['Amount'] == row['Amount'] &&
+          r['Date'] == row['Date'] &&
+          r['Note'] == row['Note'],
     );
   }
 }
@@ -175,8 +404,15 @@ class _SavingCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      (row['Category'] ?? row['Name'] ?? 'No Category')
-                          .toString(),
+                      [
+                        (row['Category'] ?? row['Name'] ?? 'No Category')
+                            .toString(),
+                        if (((row['Subcategory'] ?? '') as String)
+                            .toString()
+                            .trim()
+                            .isNotEmpty)
+                          (row['Subcategory']).toString(),
+                      ].join(' • '),
                       style: Theme.of(context).textTheme.titleMedium!.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -220,19 +456,54 @@ class _SavingCard extends StatelessWidget {
               const SizedBox(width: 12),
               ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: row['Receipt'] != null
-                    ? Image.memory(
-                        row['Receipt'] as Uint8List,
+                child:
+                    (row['LocalReceiptPath'] != null &&
+                        (row['LocalReceiptPath'] as String).isNotEmpty)
+                    ? Image.file(
+                        File(row['LocalReceiptPath'] as String),
                         width: 64,
                         height: 64,
                         fit: BoxFit.cover,
+                        errorBuilder: (c, e, s) => Container(
+                          width: 64,
+                          height: 64,
+                          color: Colors.grey[200],
+                          child: const Icon(Icons.broken_image, size: 28),
+                        ),
                       )
-                    : Container(
+                    : (row['ReceiptUrl'] != null &&
+                          (row['ReceiptUrl'] as String).isNotEmpty)
+                    ? Image.network(
+                        row['ReceiptUrl'] as String,
                         width: 64,
                         height: 64,
-                        color: Colors.grey[200],
-                        child: const Icon(Icons.savings_outlined, size: 28),
-                      ),
+                        fit: BoxFit.cover,
+                        errorBuilder: (c, e, s) => Container(
+                          width: 64,
+                          height: 64,
+                          color: Colors.grey[200],
+                          child: const Icon(Icons.broken_image, size: 28),
+                        ),
+                      )
+                    : (row['Receipt'] != null
+                          ? Image.memory(
+                              row['Receipt'] as Uint8List,
+                              width: 64,
+                              height: 64,
+                              fit: BoxFit.cover,
+                              errorBuilder: (c, e, s) => Container(
+                                width: 64,
+                                height: 64,
+                                color: Colors.grey[200],
+                                child: const Icon(Icons.broken_image, size: 28),
+                              ),
+                            )
+                          : Container(
+                              width: 64,
+                              height: 64,
+                              color: Colors.grey[200],
+                              child: const Icon(Icons.receipt_long, size: 28),
+                            )),
               ),
             ],
           ),
@@ -242,32 +513,24 @@ class _SavingCard extends StatelessWidget {
   }
 }
 
-class _SavingsSummaryHeader extends StatelessWidget {
-  final String totalLabel;
+class _GoalSection extends StatelessWidget {
   final String? goalLabel;
   final double progress;
   final double remainingRatio; // 0..1
   final VoidCallback? onSetGoal;
+  final Color color;
 
-  const _SavingsSummaryHeader({
-    required this.totalLabel,
+  const _GoalSection({
     required this.goalLabel,
     required this.progress,
     required this.remainingRatio,
     required this.onSetGoal,
+    required this.color,
   });
 
   @override
   Widget build(BuildContext context) {
-    final isRed = goalLabel != null && remainingRatio <= 0.2;
-    final valueColor = isRed
-        ? Colors.red
-        : (progress >= 1.0
-              ? Colors.green
-              : (progress > 0.75 ? Colors.orange : Colors.green));
-
     final pct = (progress * 100).clamp(0, 100).toStringAsFixed(0);
-
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -282,21 +545,10 @@ class _SavingsSummaryHeader extends StatelessWidget {
         children: [
           Row(
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Savings',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      totalLabel,
-                      style: Theme.of(context).textTheme.headlineSmall!
-                          .copyWith(fontWeight: FontWeight.w800),
-                    ),
-                  ],
+              const Expanded(
+                child: Text(
+                  'Goal',
+                  style: TextStyle(fontWeight: FontWeight.w700),
                 ),
               ),
               TextButton.icon(
@@ -306,26 +558,11 @@ class _SavingsSummaryHeader extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           if (goalLabel != null) ...[
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Goal: $goalLabel',
-                  style: TextStyle(
-                    color: isRed ? Colors.red : Colors.grey[700],
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                Text(
-                  isRed ? '20% left' : '$pct%',
-                  style: TextStyle(
-                    color: isRed ? Colors.red : Colors.green,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
+              children: [Text('Goal: $goalLabel'), Text('$pct%')],
             ),
             const SizedBox(height: 8),
             ClipRRect(
@@ -334,11 +571,139 @@ class _SavingsSummaryHeader extends StatelessWidget {
                 value: progress,
                 minHeight: 10,
                 backgroundColor: Colors.grey.shade300,
-                valueColor: AlwaysStoppedAnimation<Color>(valueColor),
+                valueColor: AlwaysStoppedAnimation<Color>(color),
               ),
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _NetSavingsSection extends StatelessWidget {
+  final String netLabel;
+  final String totalLabel;
+  final String expensesLabel;
+  final double progress;
+  final Color color;
+  const _NetSavingsSection({
+    required this.netLabel,
+    required this.totalLabel,
+    required this.expensesLabel,
+    required this.progress,
+    required this.color,
+  });
+  @override
+  Widget build(BuildContext context) {
+    final hint = 'Total Savings = $totalLabel – $expensesLabel = $netLabel';
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Theme.of(context).dividerColor.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Savings', style: TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 10,
+              backgroundColor: Colors.grey.shade300,
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(hint, style: Theme.of(context).textTheme.bodySmall),
+          const SizedBox(height: 6),
+          Text(
+            'Total of all savings records: $totalLabel',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AggregationSection extends StatelessWidget {
+  final List<Map<String, dynamic>> rows;
+  final bool showAll;
+  final VoidCallback onToggle;
+  final NumberFormat currency;
+  const _AggregationSection({
+    required this.rows,
+    required this.showAll,
+    required this.onToggle,
+    required this.currency,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bySub = <String, double>{};
+    for (final r in rows) {
+      final cat = (r['Category'] ?? 'Uncategorized').toString();
+      final sub = (r['Subcategory'] ?? 'Unspecified').toString();
+      final key = '$cat • $sub';
+      final amt = (r['Amount'] is num) ? (r['Amount'] as num).toDouble() : 0.0;
+      bySub[key] = (bySub[key] ?? 0) + amt;
+    }
+    final entries = bySub.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final visible = showAll ? entries : entries.take(3).toList();
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Savings by sub category',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: onToggle,
+                  child: Text(showAll ? 'Show less' : 'Show more'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (visible.isEmpty)
+              const Text('No data yet')
+            else
+              Column(
+                children: [
+                  for (final e in visible)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6.0),
+                      child: Row(
+                        children: [
+                          Expanded(child: Text(e.key)),
+                          Text(
+                            currency.format(e.value),
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -410,7 +775,7 @@ class SavingsDetailsPage extends StatelessWidget {
           ),
         ],
       ),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -420,7 +785,17 @@ class SavingsDetailsPage extends StatelessWidget {
               style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 24),
-            _buildDetailRow('Category', saving['Category'] ?? ''),
+            _buildDetailRow(
+              'Category',
+              [
+                (saving['Category'] ?? '').toString(),
+                if (((saving['Subcategory'] ?? '') as String)
+                    .toString()
+                    .trim()
+                    .isNotEmpty)
+                  (saving['Subcategory']).toString(),
+              ].where((e) => e.isNotEmpty).join(' • '),
+            ),
             _buildDetailRow(
               'Amount',
               '₱${(saving['Amount'] ?? 0.0).toStringAsFixed(2)}',
@@ -428,18 +803,47 @@ class SavingsDetailsPage extends StatelessWidget {
             _buildDetailRow('Date', saving['Date'] ?? ''),
             _buildDetailRow('Note', saving['Note'] ?? ''),
             const SizedBox(height: 32),
-            if (saving['Receipt'] != null)
-              Center(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: Image.memory(
-                    saving['Receipt'],
-                    width: MediaQuery.of(context).size.width * 0.9,
-                    height: MediaQuery.of(context).size.height * 0.5,
-                    fit: BoxFit.contain,
-                  ),
-                ),
+            Center(
+              child: Builder(
+                builder: (context) {
+                  final localPath =
+                      (saving['LocalReceiptPath'] ?? '') as String;
+                  final url = (saving['ReceiptUrl'] ?? '') as String;
+                  if (localPath.isNotEmpty) {
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.file(
+                        File(localPath),
+                        width: MediaQuery.of(context).size.width * 0.9,
+                        height: MediaQuery.of(context).size.height * 0.5,
+                        fit: BoxFit.contain,
+                      ),
+                    );
+                  } else if (url.isNotEmpty) {
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.network(
+                        url,
+                        width: MediaQuery.of(context).size.width * 0.9,
+                        height: MediaQuery.of(context).size.height * 0.5,
+                        fit: BoxFit.contain,
+                      ),
+                    );
+                  } else if (saving['Receipt'] != null) {
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.memory(
+                        saving['Receipt'],
+                        width: MediaQuery.of(context).size.width * 0.9,
+                        height: MediaQuery.of(context).size.height * 0.5,
+                        fit: BoxFit.contain,
+                      ),
+                    );
+                  }
+                  return const SizedBox.shrink();
+                },
               ),
+            ),
           ],
         ),
       ),
@@ -493,11 +897,7 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
   final box = Hive.box('budgetBox');
   final NumberFormat _decimalFmt = NumberFormat.decimalPattern();
 
-  bool get _canSave {
-    final raw = amountController.text.replaceAll(',', '').trim();
-    final val = double.tryParse(raw) ?? 0.0;
-    return (selectedCategory != null && val > 0);
-  }
+  // Validation handled in _handleSaveTap to show SnackBar reasons
 
   @override
   void initState() {
@@ -737,6 +1137,7 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
         : [];
 
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
         title: Text(
           widget.saving['Category'] == '' ? 'Add Saving' : 'Edit Saving',
@@ -745,28 +1146,17 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
           IconButton(
             icon: const Icon(Icons.save),
             tooltip: 'Save',
-            onPressed: _canSave
-                ? () {
-                    final updatedSaving = {
-                      'Category': selectedCategory ?? '',
-                      'Subcategory': selectedSubcategory ?? '',
-                      'Amount':
-                          double.tryParse(
-                            amountController.text.replaceAll(',', ''),
-                          ) ??
-                          0.0,
-                      'Date': dateController.text,
-                      'Note': noteController.text,
-                      'Receipt': receipt,
-                    };
-                    Navigator.pop(context, updatedSaving);
-                  }
-                : null,
+            onPressed: _handleSaveTap,
           ),
         ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
+        padding: EdgeInsets.fromLTRB(
+          24,
+          24,
+          24,
+          24 + MediaQuery.of(context).viewInsets.bottom,
+        ),
         child: Column(
           children: [
             Row(
@@ -842,6 +1232,18 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
                   ),
                 ],
               ),
+              if (selectedSubcategory == null ||
+                  (selectedSubcategory?.trim().isEmpty ?? true))
+                const Padding(
+                  padding: EdgeInsets.only(top: 8.0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Subcategory is required',
+                      style: TextStyle(color: Colors.red),
+                    ),
+                  ),
+                ),
               const SizedBox(height: 20),
             ],
             TextField(
@@ -858,6 +1260,19 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
                 border: OutlineInputBorder(),
               ),
             ),
+            if ((double.tryParse(amountController.text.replaceAll(',', '')) ??
+                    0.0) <=
+                0.0)
+              const Padding(
+                padding: EdgeInsets.only(top: 8.0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Amount must be greater than 0',
+                    style: TextStyle(color: Colors.red),
+                  ),
+                ),
+              ),
             const SizedBox(height: 20),
             TextField(
               controller: dateController,
@@ -894,9 +1309,17 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
                   width: MediaQuery.of(context).size.width * 0.9,
                   height: MediaQuery.of(context).size.height * 0.4,
                   fit: BoxFit.cover,
+                  errorBuilder: (c, e, s) => Container(
+                    width: MediaQuery.of(context).size.width * 0.9,
+                    height: MediaQuery.of(context).size.height * 0.4,
+                    color: Colors.grey[200],
+                    child: const Icon(Icons.broken_image, size: 48),
+                  ),
                 ),
               ),
-            Row(
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
               children: [
                 ElevatedButton.icon(
                   onPressed: _showImageSourceSheet,
@@ -905,7 +1328,6 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
                     receipt == null ? 'Attach Image' : 'Change Image',
                   ),
                 ),
-                const SizedBox(width: 12),
                 if (receipt != null)
                   OutlinedButton.icon(
                     onPressed: () => setState(() => receipt = null),
@@ -926,28 +1348,42 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
               borderRadius: BorderRadius.circular(16),
             ),
           ),
-          onPressed: _canSave
-              ? () {
-                  final updatedSaving = {
-                    'Category': selectedCategory ?? '',
-                    'Subcategory': selectedSubcategory ?? '',
-                    'Amount':
-                        double.tryParse(
-                          amountController.text.replaceAll(',', ''),
-                        ) ??
-                        0.0,
-                    'Date': dateController.text,
-                    'Note': noteController.text,
-                    'Receipt': receipt,
-                  };
-                  Navigator.pop(context, updatedSaving);
-                }
-              : null,
+          onPressed: _handleSaveTap,
           icon: const Icon(Icons.save),
           label: const Text("Save Saving"),
         ),
       ),
     );
+  }
+
+  void _handleSaveTap() {
+    final raw = amountController.text.replaceAll(',', '').trim();
+    final amountVal = double.tryParse(raw) ?? 0.0;
+    final missing = <String>[];
+    if (selectedCategory == null) missing.add('Category');
+    if (selectedSubcategory == null ||
+        (selectedSubcategory?.trim().isEmpty ?? true)) {
+      missing.add('Subcategory');
+    }
+    if (amountVal <= 0) missing.add('Amount > 0');
+
+    if (missing.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Please complete: ${missing.join(' • ')}')),
+      );
+      return;
+    }
+
+    final updatedSaving = {
+      'Category': selectedCategory ?? '',
+      'Subcategory': selectedSubcategory ?? '',
+      'Amount': amountVal,
+      'Date': dateController.text,
+      'Note': noteController.text,
+      'Receipt': receipt,
+      'id': widget.saving['id'],
+    };
+    Navigator.pop(context, updatedSaving);
   }
 }
 

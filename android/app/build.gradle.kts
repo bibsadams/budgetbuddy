@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.budgetbuddy" // ✅ Must match Firebase project
-        minSdk = flutter.minSdkVersion
+    minSdk = 23
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

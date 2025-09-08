@@ -1269,10 +1269,18 @@ class _YearDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Ensure unique, sorted years and that 0 (All years) exists exactly once.
+    final uniqueYears = <int>{...years}..removeWhere((e) => e < 0);
+    uniqueYears.add(0);
+    final finalYears = uniqueYears.toList()..sort();
+
+    // If current value isn't present (e.g., saved year with no data), fallback to 0.
+    final effectiveValue = finalYears.contains(value) ? value : 0;
+
     final labels = {0: 'All years'};
     return DropdownButton<int>(
-      value: value,
-      items: years
+      value: effectiveValue,
+      items: finalYears
           .map(
             (y) => DropdownMenuItem(
               value: y,

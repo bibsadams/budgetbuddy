@@ -172,7 +172,8 @@ class BillsTab extends StatelessWidget {
         ? (bill['Amount'] as num).toDouble()
         : 0.0;
     final dateStr = (bill['Due Date'] ?? '') as String; // yyyy-MM-dd
-    final timeStr = (bill['Time'] ?? '09:00') as String; // HH:mm
+    final timeStrRaw = (bill['Time'] ?? '') as String; // may be blank
+    final timeStr = timeStrRaw.trim().isEmpty ? '09:00' : timeStrRaw; // HH:mm
     final repeatStr = (bill['Repeat'] ?? 'None') as String;
     final repeat = _parseRepeat(repeatStr);
 
@@ -183,8 +184,8 @@ class BillsTab extends StatelessWidget {
     final month = int.tryParse(parts[1]) ?? DateTime.now().month;
     final day = int.tryParse(parts[2]) ?? DateTime.now().day;
     final hm = timeStr.split(':');
-    final hour = int.tryParse(hm[0]) ?? 9;
-    final minute = int.tryParse(hm[1]) ?? 0;
+    final hour = (hm.isNotEmpty ? int.tryParse(hm[0]) : null) ?? 9;
+    final minute = (hm.length > 1 ? int.tryParse(hm[1]) : null) ?? 0;
 
     final dt = DateTime(year, month, day, hour, minute);
     final title = 'Bill due: $name';
@@ -225,7 +226,7 @@ class _BillEditPageState extends State<_BillEditPage> {
   late TextEditingController _amount;
   late TextEditingController _date; // yyyy-MM-dd
   late TextEditingController _time; // HH:mm
-  String _repeat = 'Monthly';
+  String _repeat = 'None';
   bool _enabled = true;
 
   @override
@@ -243,8 +244,8 @@ class _BillEditPageState extends State<_BillEditPage> {
           widget.initial?['Due Date'] ??
           "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}",
     );
-    _time = TextEditingController(text: widget.initial?['Time'] ?? '09:00');
-    _repeat = widget.initial?['Repeat'] ?? 'Monthly';
+    _time = TextEditingController(text: widget.initial?['Time'] ?? '');
+    _repeat = widget.initial?['Repeat'] ?? 'None';
     _enabled = widget.initial?['Enabled'] ?? true;
   }
 
