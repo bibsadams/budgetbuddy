@@ -96,8 +96,9 @@ class _MyAppState extends State<MyApp> {
                 final box = await Hive.openBox('budgetBox');
                 final user = FirebaseAuth.instance.currentUser;
                 String? active = box.get('accountId') as String?;
-                List<String> savedAccounts =
-                    List<String>.from(box.get('linkedAccounts') ?? []);
+                List<String> savedAccounts = List<String>.from(
+                  box.get('linkedAccounts') ?? [],
+                );
 
                 // Prefer an existing account if available
                 if (active == null) {
@@ -141,13 +142,14 @@ class _MyAppState extends State<MyApp> {
                     const digits = '23456789';
                     final r = Random();
                     String pick(int n, String chars) => String.fromCharCodes(
-                          List.generate(
-                            n,
-                            (_) => chars.codeUnitAt(r.nextInt(chars.length)),
-                          ),
-                        );
+                      List.generate(
+                        n,
+                        (_) => chars.codeUnitAt(r.nextInt(chars.length)),
+                      ),
+                    );
                     return 'BB-${pick(4, letters)}-${pick(4, digits)}';
                   }
+
                   String personalId = genId();
                   int attempts = 0;
                   while (savedAccounts.contains(personalId) && attempts < 5) {
@@ -231,10 +233,8 @@ class LoginPage extends StatelessWidget {
                               duration: const Duration(milliseconds: 600),
                               curve: Curves.easeOutCubic,
                               tween: Tween(begin: 0.9, end: 1),
-                              builder: (context, scale, child) => Transform.scale(
-                                scale: scale,
-                                child: child,
-                              ),
+                              builder: (context, scale, child) =>
+                                  Transform.scale(scale: scale, child: child),
                               child: Container(
                                 width: size,
                                 height: size,
@@ -250,7 +250,9 @@ class LoginPage extends StatelessWidget {
                                   ),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.black.withValues(alpha: 0.08),
+                                      color: Colors.black.withValues(
+                                        alpha: 0.08,
+                                      ),
                                       blurRadius: 22,
                                       offset: const Offset(0, 10),
                                     ),
@@ -262,11 +264,12 @@ class LoginPage extends StatelessWidget {
                                     'assets/app_logo.png',
                                     fit: BoxFit.contain,
                                     filterQuality: FilterQuality.high,
-                                    errorBuilder: (context, error, stackTrace) => Icon(
-                                      Icons.account_balance_wallet_rounded,
-                                      size: size * 0.6,
-                                      color: cs.primary,
-                                    ),
+                                    errorBuilder:
+                                        (context, error, stackTrace) => Icon(
+                                          Icons.account_balance_wallet_rounded,
+                                          size: size * 0.6,
+                                          color: cs.primary,
+                                        ),
                                   ),
                                 ),
                               ),
@@ -305,17 +308,22 @@ class LoginPage extends StatelessWidget {
                             elevation: 0,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(14),
-                              side: BorderSide(color: Colors.black.withValues(alpha: 0.08)),
+                              side: BorderSide(
+                                color: Colors.black.withValues(alpha: 0.08),
+                              ),
                             ),
                           ),
                           onPressed: () async {
                             try {
-                              final user = await AuthService().signInWithGoogle();
+                              final user = await AuthService()
+                                  .signInWithGoogle();
                               if (user != null) onSignIn();
                             } catch (e) {
                               if (!context.mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text('Google Sign-In failed: $e')),
+                                SnackBar(
+                                  content: Text('Google Sign-In failed: $e'),
+                                ),
                               );
                             }
                           },
@@ -367,7 +375,10 @@ class _GlassCard extends StatelessWidget {
                 ],
               ),
               borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 0.8),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.5),
+                width: 0.8,
+              ),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.08),

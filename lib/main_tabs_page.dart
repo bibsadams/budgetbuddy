@@ -82,7 +82,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
     super.initState();
     box = Hive.box('budgetBox');
     _initShared();
-  _pageController = PageController(initialPage: _index);
+    _pageController = PageController(initialPage: _index);
   }
 
   // Generate a stable-ish uid for a receipt (no external dependency; 26-28 chars)
@@ -170,8 +170,8 @@ class _MainTabsPageState extends State<MainTabsPage> {
       }
 
       if (hasBytes) {
-        String receiptUid =
-            (item['ReceiptUid'] ?? item['receiptUid'] ?? '').toString();
+        String receiptUid = (item['ReceiptUid'] ?? item['receiptUid'] ?? '')
+            .toString();
         if (receiptUid.isEmpty) {
           receiptUid = _genReceiptUid();
           item['ReceiptUid'] = receiptUid;
@@ -561,6 +561,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
       void putNum(String key, Object? v) {
         if (v is num) box.put(key, v.toDouble());
       }
+
       // Expenses percents
       putNum('expensesLimitPercent_this_week', expPct['this_week']);
       putNum('expensesLimitPercent_this_month', expPct['this_month']);
@@ -595,7 +596,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
     );
     if (index < 0 || index >= list.length) return null;
     final item = Map<String, dynamic>.from(list[index]);
-  final hasBytes = item['Receipt'] != null && item['Receipt'] is Uint8List;
+    final hasBytes = item['Receipt'] != null && item['Receipt'] is Uint8List;
     if (!hasBytes) return null;
 
     // Assign a local id if absent
@@ -729,16 +730,31 @@ class _MainTabsPageState extends State<MainTabsPage> {
       PrimaryScrollController(
         controller: _homeScroll,
         child: HomeTab(
-        tableData: tableData,
-        tabLimits: tabLimits,
-        savingsGoals: savingsGoals,
+          tableData: tableData,
+          tabLimits: tabLimits,
+          savingsGoals: savingsGoals,
         ),
       ),
-      PrimaryScrollController(controller: _expensesScroll, child: _buildExpensesPage()),
-      PrimaryScrollController(controller: _savingsScroll, child: _buildSavingsPage()),
-      PrimaryScrollController(controller: _billsScroll, child: _buildBillsPage()),
-      PrimaryScrollController(controller: _reportScroll, child: _buildReportPage()),
-      PrimaryScrollController(controller: _settingsScroll, child: _buildSettingsPage()),
+      PrimaryScrollController(
+        controller: _expensesScroll,
+        child: _buildExpensesPage(),
+      ),
+      PrimaryScrollController(
+        controller: _savingsScroll,
+        child: _buildSavingsPage(),
+      ),
+      PrimaryScrollController(
+        controller: _billsScroll,
+        child: _buildBillsPage(),
+      ),
+      PrimaryScrollController(
+        controller: _reportScroll,
+        child: _buildReportPage(),
+      ),
+      PrimaryScrollController(
+        controller: _settingsScroll,
+        child: _buildSettingsPage(),
+      ),
     ];
 
     final destinations = const <NavigationDestination>[
@@ -774,156 +790,163 @@ class _MainTabsPageState extends State<MainTabsPage> {
       ),
     ];
 
-  // Top bar removed; joint indicator moved into Settings
+    // Top bar removed; joint indicator moved into Settings
 
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: (_) => _scheduleTapAutosave(),
       onPointerUp: (_) => _scheduleTapAutosave(),
       child: Scaffold(
-      backgroundColor: Colors.transparent,
-      body: Stack(
-        children: [
-          // Gradient background with app content
-          AppGradientBackground(
-            child: SafeArea(
-              child: Padding(
-                // Add bottom padding so content isn't obscured by floating tabs
-                padding: const EdgeInsets.only(bottom: 86),
-                child: Column(
-                  children: [
-                    if (((widget.initialWarning ?? '').isNotEmpty) ||
-                        ((_cloudWarning ?? '').isNotEmpty))
-                      Material(
-                        color: Colors.amber.shade100,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 8,
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Padding(
-                                padding: EdgeInsets.only(top: 2),
-                                child: Icon(Icons.warning_amber_rounded, size: 18),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    if ((widget.initialWarning ?? '').isNotEmpty)
-                                      Text(
-                                        widget.initialWarning!,
-                                        style: const TextStyle(fontSize: 12),
-                                      ),
-                                    if ((widget.initialWarning ?? '').isNotEmpty &&
-                                        (_cloudWarning ?? '').isNotEmpty)
-                                      const SizedBox(height: 4),
-                                    if ((_cloudWarning ?? '').isNotEmpty)
-                                      Text(
-                                        _cloudWarning!,
-                                        style: const TextStyle(fontSize: 12),
-                                      ),
-                                  ],
+        backgroundColor: Colors.transparent,
+        body: Stack(
+          children: [
+            // Gradient background with app content
+            AppGradientBackground(
+              child: SafeArea(
+                child: Padding(
+                  // Add bottom padding so content isn't obscured by floating tabs
+                  padding: const EdgeInsets.only(bottom: 86),
+                  child: Column(
+                    children: [
+                      if (((widget.initialWarning ?? '').isNotEmpty) ||
+                          ((_cloudWarning ?? '').isNotEmpty))
+                        Material(
+                          color: Colors.amber.shade100,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Padding(
+                                  padding: EdgeInsets.only(top: 2),
+                                  child: Icon(
+                                    Icons.warning_amber_rounded,
+                                    size: 18,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 8),
-                              if ((_cloudWarning ?? '').isNotEmpty)
-                                TextButton(
-                                  onPressed: _showCloudFixDialog,
-                                  child: const Text('How to fix'),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      if ((widget.initialWarning ?? '')
+                                          .isNotEmpty)
+                                        Text(
+                                          widget.initialWarning!,
+                                          style: const TextStyle(fontSize: 12),
+                                        ),
+                                      if ((widget.initialWarning ?? '')
+                                              .isNotEmpty &&
+                                          (_cloudWarning ?? '').isNotEmpty)
+                                        const SizedBox(height: 4),
+                                      if ((_cloudWarning ?? '').isNotEmpty)
+                                        Text(
+                                          _cloudWarning!,
+                                          style: const TextStyle(fontSize: 12),
+                                        ),
+                                    ],
+                                  ),
                                 ),
-                              if ((_cloudWarning ?? '').isNotEmpty)
-                                IconButton(
-                                  tooltip: 'Dismiss',
-                                  icon: const Icon(Icons.close, size: 18),
-                                  onPressed: () => setState(() => _cloudWarning = null),
-                                ),
-                            ],
+                                const SizedBox(width: 8),
+                                if ((_cloudWarning ?? '').isNotEmpty)
+                                  TextButton(
+                                    onPressed: _showCloudFixDialog,
+                                    child: const Text('How to fix'),
+                                  ),
+                                if ((_cloudWarning ?? '').isNotEmpty)
+                                  IconButton(
+                                    tooltip: 'Dismiss',
+                                    icon: const Icon(Icons.close, size: 18),
+                                    onPressed: () =>
+                                        setState(() => _cloudWarning = null),
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
+                      Expanded(
+                        child: PageView.builder(
+                          controller: _pageController,
+                          physics: const BouncingScrollPhysics(),
+                          allowImplicitScrolling: true,
+                          onPageChanged: (i) {
+                            setState(() => _index = i);
+                            // Light haptic on settle
+                            HapticFeedback.lightImpact();
+                          },
+                          itemCount: pages.length,
+                          itemBuilder: (context, i) {
+                            return _FancyPage(
+                              controller: _pageController,
+                              index: i,
+                              child: _KeepAlive(child: pages[i]),
+                            );
+                          },
+                        ),
                       ),
-                    Expanded(
-                      child: PageView.builder(
-                        controller: _pageController,
-                        physics: const BouncingScrollPhysics(),
-                        allowImplicitScrolling: true,
-                        onPageChanged: (i) {
-                          setState(() => _index = i);
-                          // Light haptic on settle
-                          HapticFeedback.lightImpact();
-                        },
-                        itemCount: pages.length,
-                        itemBuilder: (context, i) {
-                          return _FancyPage(
-                            controller: _pageController,
-                            index: i,
-                            child: _KeepAlive(child: pages[i]),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
-          // Floating glass tab bar overlay
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: _AnimatedGlassTabBar(
-              currentIndex: _index,
-              destinations: destinations,
-              onTap: (i) {
-                if (i == _index) {
-                  // Scroll current tab to top
-                  final map = {
-                    0: _homeScroll,
-                    1: _expensesScroll,
-                    2: _savingsScroll,
-                    3: _billsScroll,
-                    4: _reportScroll,
-                    5: _settingsScroll,
-                  };
-                  final ctrl = map[i];
-                  if (ctrl != null && ctrl.hasClients) {
-                    ctrl.animateTo(
-                      0,
-                      duration: const Duration(milliseconds: 350),
-                      curve: Curves.easeOutCubic,
-                    );
+            // Floating glass tab bar overlay
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _AnimatedGlassTabBar(
+                currentIndex: _index,
+                destinations: destinations,
+                onTap: (i) {
+                  if (i == _index) {
+                    // Scroll current tab to top
+                    final map = {
+                      0: _homeScroll,
+                      1: _expensesScroll,
+                      2: _savingsScroll,
+                      3: _billsScroll,
+                      4: _reportScroll,
+                      5: _settingsScroll,
+                    };
+                    final ctrl = map[i];
+                    if (ctrl != null && ctrl.hasClients) {
+                      ctrl.animateTo(
+                        0,
+                        duration: const Duration(milliseconds: 350),
+                        curve: Curves.easeOutCubic,
+                      );
+                    }
+                    return;
                   }
-                  return;
-                }
-                HapticFeedback.selectionClick();
-                _pageController.animateToPage(
-                  i,
-                  duration: const Duration(milliseconds: 360),
-                  curve: Curves.easeOutCubic,
-                );
-              },
+                  HapticFeedback.selectionClick();
+                  _pageController.animateToPage(
+                    i,
+                    duration: const Duration(milliseconds: 360),
+                    curve: Curves.easeOutCubic,
+                  );
+                },
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
-    ),
-  );
+    );
   }
 
   @override
   void dispose() {
     _tapAutosave?.cancel();
     _pageController.dispose();
-  _homeScroll.dispose();
-  _expensesScroll.dispose();
-  _savingsScroll.dispose();
-  _billsScroll.dispose();
-  _reportScroll.dispose();
-  _settingsScroll.dispose();
+    _homeScroll.dispose();
+    _expensesScroll.dispose();
+    _savingsScroll.dispose();
+    _billsScroll.dispose();
+    _reportScroll.dispose();
+    _settingsScroll.dispose();
     super.dispose();
   }
 
@@ -978,13 +1001,16 @@ class _MainTabsPageState extends State<MainTabsPage> {
       padding: const EdgeInsets.symmetric(vertical: 8),
       children: [
         // Header row with Joint indicator and Add Account
-  Padding(
+        Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
           child: Row(
             children: [
               if (_accountDoc != null)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: isJoint
                         ? Colors.green.withValues(alpha: 0.12)
@@ -1116,12 +1142,17 @@ class _MainTabsPageState extends State<MainTabsPage> {
         const Divider(height: 1),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: Text('Receipts backup', style: Theme.of(context).textTheme.titleMedium),
+          child: Text(
+            'Receipts backup',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
         ),
         ListTile(
           leading: const Icon(Icons.file_download_outlined),
           title: const Text('Export receipts'),
-          subtitle: const Text('Create a manifest.json and copy images (by receiptUid)'),
+          subtitle: const Text(
+            'Create a manifest.json and copy images (by receiptUid)',
+          ),
           onTap: _exportReceipts,
         ),
         ListTile(
@@ -1154,8 +1185,10 @@ class _MainTabsPageState extends State<MainTabsPage> {
               await AuthService().signOut();
               if (!mounted) return;
               // After sign out, clear to root and let MyApp's auth listener show LoginPage
-              Navigator.of(context, rootNavigator: true)
-                  .popUntil((route) => route.isFirst);
+              Navigator.of(
+                context,
+                rootNavigator: true,
+              ).popUntil((route) => route.isFirst);
             } catch (e) {
               if (!mounted) return;
               ScaffoldMessenger.of(
@@ -1173,12 +1206,19 @@ class _MainTabsPageState extends State<MainTabsPage> {
     if (_repo == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cloud not initialized. Sign in and open an account first.')),
+        const SnackBar(
+          content: Text(
+            'Cloud not initialized. Sign in and open an account first.',
+          ),
+        ),
       );
       return;
     }
     try {
-      final svc = ReceiptBackupService(accountId: widget.accountId, repo: _repo!);
+      final svc = ReceiptBackupService(
+        accountId: widget.accountId,
+        repo: _repo!,
+      );
       final dir = await svc.exportAll();
       if (!mounted) return;
       showDialog(
@@ -1196,9 +1236,9 @@ class _MainTabsPageState extends State<MainTabsPage> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Export failed: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Export failed: $e')));
     }
   }
 
@@ -1214,14 +1254,17 @@ class _MainTabsPageState extends State<MainTabsPage> {
       );
       if (manifestResult != null && manifestResult.files.isNotEmpty) {
         final filePath = manifestResult.files.single.path;
-        if (filePath != null && filePath.toLowerCase().endsWith('manifest.json')) {
+        if (filePath != null &&
+            filePath.toLowerCase().endsWith('manifest.json')) {
           final dir = Directory(File(filePath).parent.path);
           await _importReceiptsFromDirectory(dir);
           return;
         }
       }
       // Fallback: pick a directory
-      final dirPath = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Pick receipts backup folder');
+      final dirPath = await FilePicker.platform.getDirectoryPath(
+        dialogTitle: 'Pick receipts backup folder',
+      );
       if (dirPath != null) {
         await _importReceiptsFromDirectory(Directory(dirPath));
         return;
@@ -1255,7 +1298,10 @@ class _MainTabsPageState extends State<MainTabsPage> {
                 const SizedBox(height: 8),
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: Text(error!, style: const TextStyle(color: Colors.red)),
+                  child: Text(
+                    error!,
+                    style: const TextStyle(color: Colors.red),
+                  ),
                 ),
               ],
             ],
@@ -1279,16 +1325,27 @@ class _MainTabsPageState extends State<MainTabsPage> {
                           throw 'Folder not found';
                         }
                         if (_repo == null) throw 'Cloud not initialized';
-                        final svc = ReceiptBackupService(accountId: widget.accountId, repo: _repo!);
+                        final svc = ReceiptBackupService(
+                          accountId: widget.accountId,
+                          repo: _repo!,
+                        );
                         final results = await svc.importAll(dir);
                         if (!mounted) return;
                         Navigator.of(ctx).pop();
-                        final attached = results.where((r) => r['status'] == 'attached_by_uid').length;
-                        final cachedOnly = results.where((r) => r['status'] == 'cached_only').length;
-                        final skipped = results.where((r) => r['status'] == 'skipped_no_file').length;
+                        final attached = results
+                            .where((r) => r['status'] == 'attached_by_uid')
+                            .length;
+                        final cachedOnly = results
+                            .where((r) => r['status'] == 'cached_only')
+                            .length;
+                        final skipped = results
+                            .where((r) => r['status'] == 'skipped_no_file')
+                            .length;
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text('Imported: attached $attached, cached $cachedOnly, skipped $skipped'),
+                            content: Text(
+                              'Imported: attached $attached, cached $cachedOnly, skipped $skipped',
+                            ),
                             duration: const Duration(seconds: 5),
                           ),
                         );
@@ -1312,24 +1369,35 @@ class _MainTabsPageState extends State<MainTabsPage> {
   Future<void> _importReceiptsFromDirectory(Directory dir) async {
     try {
       if (_repo == null) throw 'Cloud not initialized';
-      final svc = ReceiptBackupService(accountId: widget.accountId, repo: _repo!);
+      final svc = ReceiptBackupService(
+        accountId: widget.accountId,
+        repo: _repo!,
+      );
       final results = await svc.importAll(dir);
       if (!mounted) return;
-      final attached = results.where((r) => r['status'] == 'attached_by_uid').length;
-      final cachedOnly = results.where((r) => r['status'] == 'cached_only').length;
-      final skipped = results.where((r) => r['status'] == 'skipped_no_file').length;
+      final attached = results
+          .where((r) => r['status'] == 'attached_by_uid')
+          .length;
+      final cachedOnly = results
+          .where((r) => r['status'] == 'cached_only')
+          .length;
+      final skipped = results
+          .where((r) => r['status'] == 'skipped_no_file')
+          .length;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Imported: attached $attached, cached $cachedOnly, skipped $skipped'),
+          content: Text(
+            'Imported: attached $attached, cached $cachedOnly, skipped $skipped',
+          ),
           duration: const Duration(seconds: 5),
         ),
       );
       setState(() {});
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Import failed: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Import failed: $e')));
     }
   }
 
@@ -1535,7 +1603,10 @@ class _MainTabsPageState extends State<MainTabsPage> {
               if (error != null)
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: Text(error!, style: const TextStyle(color: Colors.red)),
+                  child: Text(
+                    error!,
+                    style: const TextStyle(color: Colors.red),
+                  ),
                 ),
             ],
           ),
@@ -1604,28 +1675,31 @@ class _MainTabsPageState extends State<MainTabsPage> {
                             .doc(myUid)
                             .snapshots()
                             .listen((doc) async {
-                          final status = (doc.data()?['status'] as String?) ?? 'pending';
-                          if (status == 'approved') {
-                            await repo.ensureMembership(
-                              displayName: user.displayName,
-                              email: user.email,
-                            );
-                            final setList = {..._linkedAccounts};
-                            setList.add(id);
-                            final arr = setList.toList();
-                            box.put('linkedAccounts', arr);
-                            if (mounted) setState(() => _linkedAccounts = arr);
-                            if (mounted)
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'Access approved. "$id" added to Switch account.',
-                                  ),
-                                ),
-                              );
-                            await sub?.cancel();
-                          }
-                        });
+                              final status =
+                                  (doc.data()?['status'] as String?) ??
+                                  'pending';
+                              if (status == 'approved') {
+                                await repo.ensureMembership(
+                                  displayName: user.displayName,
+                                  email: user.email,
+                                );
+                                final setList = {..._linkedAccounts};
+                                setList.add(id);
+                                final arr = setList.toList();
+                                box.put('linkedAccounts', arr);
+                                if (mounted)
+                                  setState(() => _linkedAccounts = arr);
+                                if (mounted)
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Access approved. "$id" added to Switch account.',
+                                      ),
+                                    ),
+                                  );
+                                await sub?.cancel();
+                              }
+                            });
 
                         if (mounted) Navigator.of(ctx).pop();
                         if (mounted)
@@ -1884,15 +1958,37 @@ class _MainTabsPageState extends State<MainTabsPage> {
                       try {
                         if (_repo != null) {
                           await _repo!.setExpensesLimitPercents({
-                            'this_week': (box.get('expensesLimitPercent_this_week') as num?)?.toDouble() ?? val,
-                            'this_month': (box.get('expensesLimitPercent_this_month') as num?)?.toDouble() ?? val,
-                            'last_week': (box.get('expensesLimitPercent_last_week') as num?)?.toDouble() ?? val,
-                            'last_month': (box.get('expensesLimitPercent_last_month') as num?)?.toDouble() ?? val,
-                            'all_expenses': (box.get('expensesLimitPercent_all_expenses') as num?)?.toDouble() ?? val,
+                            'this_week':
+                                (box.get('expensesLimitPercent_this_week')
+                                        as num?)
+                                    ?.toDouble() ??
+                                val,
+                            'this_month':
+                                (box.get('expensesLimitPercent_this_month')
+                                        as num?)
+                                    ?.toDouble() ??
+                                val,
+                            'last_week':
+                                (box.get('expensesLimitPercent_last_week')
+                                        as num?)
+                                    ?.toDouble() ??
+                                val,
+                            'last_month':
+                                (box.get('expensesLimitPercent_last_month')
+                                        as num?)
+                                    ?.toDouble() ??
+                                val,
+                            'all_expenses':
+                                (box.get('expensesLimitPercent_all_expenses')
+                                        as num?)
+                                    ?.toDouble() ??
+                                val,
                           });
                           if (mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Limit percent saved to cloud.')),
+                              const SnackBar(
+                                content: Text('Limit percent saved to cloud.'),
+                              ),
                             );
                           }
                         }
@@ -1900,7 +1996,9 @@ class _MainTabsPageState extends State<MainTabsPage> {
                         if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                              content: Text('Cloud save failed. Kept locally. Use Settings > Validate cloud setup.'),
+                              content: Text(
+                                'Cloud save failed. Kept locally. Use Settings > Validate cloud setup.',
+                              ),
                             ),
                           );
                         }
@@ -2136,15 +2234,39 @@ class _MainTabsPageState extends State<MainTabsPage> {
                       try {
                         if (_repo != null) {
                           await _repo!.setSavingsGoalPercents({
-                            'this_week': (box.get('savingsGoalPercent_this_week') as num?)?.toDouble() ?? val,
-                            'this_month': (box.get('savingsGoalPercent_this_month') as num?)?.toDouble() ?? val,
-                            'last_week': (box.get('savingsGoalPercent_last_week') as num?)?.toDouble() ?? val,
-                            'last_month': (box.get('savingsGoalPercent_last_month') as num?)?.toDouble() ?? val,
-                            'all_savings': (box.get('savingsGoalPercent_all_savings') as num?)?.toDouble() ?? val,
+                            'this_week':
+                                (box.get('savingsGoalPercent_this_week')
+                                        as num?)
+                                    ?.toDouble() ??
+                                val,
+                            'this_month':
+                                (box.get('savingsGoalPercent_this_month')
+                                        as num?)
+                                    ?.toDouble() ??
+                                val,
+                            'last_week':
+                                (box.get('savingsGoalPercent_last_week')
+                                        as num?)
+                                    ?.toDouble() ??
+                                val,
+                            'last_month':
+                                (box.get('savingsGoalPercent_last_month')
+                                        as num?)
+                                    ?.toDouble() ??
+                                val,
+                            'all_savings':
+                                (box.get('savingsGoalPercent_all_savings')
+                                        as num?)
+                                    ?.toDouble() ??
+                                val,
                           });
                           if (mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('Savings goal percent saved to cloud.')),
+                              const SnackBar(
+                                content: Text(
+                                  'Savings goal percent saved to cloud.',
+                                ),
+                              ),
                             );
                           }
                         }
@@ -2152,7 +2274,9 @@ class _MainTabsPageState extends State<MainTabsPage> {
                         if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                              content: Text('Cloud save failed. Kept locally. Use Settings > Validate cloud setup.'),
+                              content: Text(
+                                'Cloud save failed. Kept locally. Use Settings > Validate cloud setup.',
+                              ),
                             ),
                           );
                         }
@@ -2228,12 +2352,12 @@ class _MainTabsPageState extends State<MainTabsPage> {
                         _clientHash(r) == ch),
               );
             }
-      if (idx != -1) {
+            if (idx != -1) {
               list[idx] = {
                 ...list[idx],
                 'id': localId,
                 'LocalReceiptPath': path,
-        'ReceiptUid': (item['ReceiptUid'] ?? '').toString(),
+                'ReceiptUid': (item['ReceiptUid'] ?? '').toString(),
                 'clientHash': ch,
               };
               tableData['Expenses'] = list;
@@ -2253,12 +2377,12 @@ class _MainTabsPageState extends State<MainTabsPage> {
                         _clientHash(r) == ch),
               );
             }
-      if (idx != -1) {
+            if (idx != -1) {
               list[idx] = {
                 ...list[idx],
                 'id': localId,
                 'LocalReceiptPath': path,
-        'ReceiptUid': (item['ReceiptUid'] ?? '').toString(),
+                'ReceiptUid': (item['ReceiptUid'] ?? '').toString(),
                 'clientHash': ch,
               };
               tableData['Savings'] = list;
@@ -2279,7 +2403,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
     try {
       if (_repo == null) return; // offline only; local already saved
 
-  if (isUpdate && localId.isNotEmpty) {
+      if (isUpdate && localId.isNotEmpty) {
         if (collection == 'expenses') {
           await _repo!.updateExpense(localId, item);
         } else {
@@ -2419,9 +2543,9 @@ class _FancyPage extends StatelessWidget {
         }
         final delta = (index - page).toDouble();
         final d = delta.abs();
-  final scale = 1.0 - (0.03 * d).clamp(0.0, 0.03);
-  final opacity = 1.0 - (0.08 * d).clamp(0.0, 0.08);
-  final shiftX = (-16.0 * delta).clamp(-22.0, 22.0);
+        final scale = 1.0 - (0.03 * d).clamp(0.0, 0.03);
+        final opacity = 1.0 - (0.08 * d).clamp(0.0, 0.08);
+        final shiftX = (-16.0 * delta).clamp(-22.0, 22.0);
         return Opacity(
           opacity: opacity,
           child: Transform.translate(

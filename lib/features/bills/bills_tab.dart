@@ -252,10 +252,20 @@ class BillsTab extends StatelessWidget {
     final startWindow = due.subtract(const Duration(days: 7));
     final start = now.isAfter(startWindow)
         ? DateTime(now.year, now.month, now.day, hour, minute)
-        : DateTime(startWindow.year, startWindow.month, startWindow.day, hour, minute);
+        : DateTime(
+            startWindow.year,
+            startWindow.month,
+            startWindow.day,
+            hour,
+            minute,
+          );
 
     int offset = 0;
-    for (DateTime d = start; !d.isAfter(due); d = d.add(const Duration(days: 1))) {
+    for (
+      DateTime d = start;
+      !d.isAfter(due);
+      d = d.add(const Duration(days: 1))
+    ) {
       final daysLeft = due.difference(d).inDays;
       String whenLabel;
       if (daysLeft > 1) {
@@ -266,12 +276,15 @@ class BillsTab extends StatelessWidget {
         whenLabel = 'Today';
       }
       final title = 'Bill due: $name';
-      final body = '${NumberFormat.currency(symbol: '₱', decimalDigits: 2).format(amount)} • $whenLabel • due $dateStr $timeStr';
+      final body =
+          '${NumberFormat.currency(symbol: '₱', decimalDigits: 2).format(amount)} • $whenLabel • due $dateStr $timeStr';
       await NotificationService().schedule(
         _notifIdFromIndex(index) + offset,
         title: title,
         body: body,
-        firstDateTime: d.isBefore(now) ? now.add(const Duration(minutes: 1)) : d,
+        firstDateTime: d.isBefore(now)
+            ? now.add(const Duration(minutes: 1))
+            : d,
         repeat: RepeatIntervalMode.none,
       );
       offset++;
@@ -279,7 +292,8 @@ class BillsTab extends StatelessWidget {
 
     // Also schedule the main due-time notification with optional repeat rule
     final finalTitle = 'Bill due: $name';
-    final finalBody = '${NumberFormat.currency(symbol: '₱', decimalDigits: 2).format(amount)} due on $dateStr at $timeStr';
+    final finalBody =
+        '${NumberFormat.currency(symbol: '₱', decimalDigits: 2).format(amount)} due on $dateStr at $timeStr';
     await NotificationService().schedule(
       _notifIdFromIndex(index) + 9,
       title: finalTitle,

@@ -267,7 +267,10 @@ class SharedAccountRepository {
     required String receiptUid,
   }) async {
     final col = collection == 'expenses' ? _expensesCol : _savingsCol;
-    final qs = await col.where('receiptUid', isEqualTo: receiptUid).limit(1).get();
+    final qs = await col
+        .where('receiptUid', isEqualTo: receiptUid)
+        .limit(1)
+        .get();
     if (qs.docs.isEmpty) return null;
     return qs.docs.first.id;
   }

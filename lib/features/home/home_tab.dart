@@ -87,7 +87,7 @@ class _HomeTabState extends State<HomeTab> {
     // Savings card: Net = Total Deposit savings of selected month - Total Expenses of selected month
     final monthlyNetSavings = (monthlySavings - totalExpense);
     // Goal uses the per-period percent set in Savings tab for this month
-  // Removed goal display in Savings card
+    // Removed goal display in Savings card
 
     // Bills due within next 7 days
     final now = DateTime.now();
@@ -128,7 +128,7 @@ class _HomeTabState extends State<HomeTab> {
     final entries = byCategory.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
-  return AppGradientBackground(
+    return AppGradientBackground(
       child: CustomScrollView(
         slivers: [
           SliverToBoxAdapter(
@@ -183,8 +183,9 @@ class _HomeTabState extends State<HomeTab> {
                     secondary: null,
                     progress: null,
                     // Savings value green if >= 0, else red
-                    valueColor:
-                        monthlyNetSavings >= 0 ? Colors.green : Colors.red,
+                    valueColor: monthlyNetSavings >= 0
+                        ? Colors.green
+                        : Colors.red,
                     tint: const Color(0xFF06D6A0),
                   ),
                   _StatCard(
@@ -257,10 +258,12 @@ class _HomeTabState extends State<HomeTab> {
                                   : (_chartMode == ChartMode.bar
                                         ? BarChart(
                                             BarChartData(
-                                              borderData:
-                                                  FlBorderData(show: false),
-                                              gridData:
-                                                  const FlGridData(show: false),
+                                              borderData: FlBorderData(
+                                                show: false,
+                                              ),
+                                              gridData: const FlGridData(
+                                                show: false,
+                                              ),
                                               titlesData: FlTitlesData(
                                                 leftTitles: const AxisTitles(
                                                   sideTitles: SideTitles(
@@ -281,10 +284,8 @@ class _HomeTabState extends State<HomeTab> {
                                                   sideTitles: SideTitles(
                                                     showTitles: true,
                                                     reservedSize: 42,
-                                                    getTitlesWidget:
-                                                        (value, meta) {
-                                                      final idx =
-                                                          value.toInt();
+                                                    getTitlesWidget: (value, meta) {
+                                                      final idx = value.toInt();
                                                       if (idx < 0 ||
                                                           idx >=
                                                               entries.length) {
@@ -294,10 +295,9 @@ class _HomeTabState extends State<HomeTab> {
                                                           entries[idx].key;
                                                       return Padding(
                                                         padding:
-                                                            const EdgeInsets
-                                                                .only(
-                                                          top: 8.0,
-                                                        ),
+                                                            const EdgeInsets.only(
+                                                              top: 8.0,
+                                                            ),
                                                         child: Text(
                                                           label.length > 8
                                                               ? '${label.substring(0, 8)}…'
@@ -312,9 +312,11 @@ class _HomeTabState extends State<HomeTab> {
                                                 ),
                                               ),
                                               barGroups: [
-                                                for (int i = 0;
-                                                    i < entries.length;
-                                                    i++)
+                                                for (
+                                                  int i = 0;
+                                                  i < entries.length;
+                                                  i++
+                                                )
                                                   BarChartGroupData(
                                                     x: i,
                                                     barRods: [
@@ -322,8 +324,9 @@ class _HomeTabState extends State<HomeTab> {
                                                         toY: entries[i].value,
                                                         width: 14,
                                                         borderRadius:
-                                                            BorderRadius
-                                                                .circular(6),
+                                                            BorderRadius.circular(
+                                                              6,
+                                                            ),
                                                         color: _colorForKey(
                                                           context,
                                                           entries[i].key,
@@ -452,9 +455,9 @@ class _StatCard extends StatelessWidget {
               duration: const Duration(milliseconds: 200),
               style:
                   (Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w800,
-                        color: valueColor,
-                      )) ??
+                    fontWeight: FontWeight.w800,
+                    color: valueColor,
+                  )) ??
                   TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
@@ -549,7 +552,10 @@ class _MonthlyDetails extends StatelessWidget {
             children: [
               Text(
                 title,
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               const SizedBox(height: 8),
               if (entries.isEmpty)
@@ -591,10 +597,26 @@ class _MonthlyDetails extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        listCard(title: 'Savings by Category', entries: savByCat, isExpense: false),
-        listCard(title: 'Savings by Subcategory', entries: savBySub, isExpense: false),
-        listCard(title: 'Expenses by Category', entries: expByCat, isExpense: true),
-        listCard(title: 'Expenses by Subcategory', entries: expBySub, isExpense: true),
+        listCard(
+          title: 'Savings by Category',
+          entries: savByCat,
+          isExpense: false,
+        ),
+        listCard(
+          title: 'Savings by Subcategory',
+          entries: savBySub,
+          isExpense: false,
+        ),
+        listCard(
+          title: 'Expenses by Category',
+          entries: expByCat,
+          isExpense: true,
+        ),
+        listCard(
+          title: 'Expenses by Subcategory',
+          entries: expBySub,
+          isExpense: true,
+        ),
       ],
     );
   }

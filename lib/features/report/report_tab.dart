@@ -238,9 +238,9 @@ class _ReportTabState extends State<ReportTab> {
                       _box.put('report_year', selectedYear);
                     }),
                   ),
-          // Hide Yearly/Quarterly toggle when 'All years' is selected
-          if ((view == 'Savings' || view == 'Expenses') &&
-            selectedYear != 0)
+                  // Hide Yearly/Quarterly toggle when 'All years' is selected
+                  if ((view == 'Savings' || view == 'Expenses') &&
+                      selectedYear != 0)
                     SegmentedButton<String>(
                       segments: const [
                         ButtonSegment(value: 'Yearly', label: Text('Yearly')),

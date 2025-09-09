@@ -38,7 +38,7 @@ class LocalReceiptService {
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
-  return '${dir.path}/$receiptUid.jpg';
+    return '${dir.path}/$receiptUid.jpg';
   }
 
   // Public helper: compute the expected local file path for a given receipt UID.
@@ -125,7 +125,7 @@ class LocalReceiptService {
         '${dir.path}/$receiptUid.jpeg',
         '${dir.path}/$receiptUid.png',
         '${dir.path}/$receiptUid.webp',
-      ]
+      ],
     ];
     for (final p in candidates) {
       final f = File(p);

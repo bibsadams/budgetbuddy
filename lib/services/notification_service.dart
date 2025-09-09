@@ -56,7 +56,10 @@ class NotificationService {
       priority: Priority.high,
     );
     const iosDetails = DarwinNotificationDetails();
-    const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+    const details = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
     await _plugin.show(id, title, body, details);
   }
 
@@ -142,9 +145,7 @@ class NotificationService {
       }
     } catch (e) {
       // Fallback: if scheduling failed, fire an immediate notification so the user still gets alerted
-      await showNow(id,
-          title: title,
-          body: body);
+      await showNow(id, title: title, body: body);
     }
   }
 

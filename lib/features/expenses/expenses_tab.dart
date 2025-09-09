@@ -235,17 +235,17 @@ class _ExpensesTabState extends State<ExpensesTab> {
       'all_expenses' => 'All Expenses',
       _ => 'This Month',
     };
-  // Dynamic effective limit: percentage of selected-period savings when configured
-  final box = Hive.box('budgetBox');
-  double percent =
-    (box.get(_limitPercentKeyForPeriod(_period)) as num?)?.toDouble() ??
-      0.0;
-  // Fallback to This Month if current period has no saved value
-  if (percent <= 0) {
-    percent = (box.get('expensesLimitPercent_this_month') as num?)
-        ?.toDouble() ??
-      0.0;
-  }
+    // Dynamic effective limit: percentage of selected-period savings when configured
+    final box = Hive.box('budgetBox');
+    double percent =
+        (box.get(_limitPercentKeyForPeriod(_period)) as num?)?.toDouble() ??
+        0.0;
+    // Fallback to This Month if current period has no saved value
+    if (percent <= 0) {
+      percent =
+          (box.get('expensesLimitPercent_this_month') as num?)?.toDouble() ??
+          0.0;
+    }
     double? effectiveLimit;
     if (percent > 0 && widget.savingsRows != null) {
       final periodSavings = _sumForPeriod(widget.savingsRows!);
@@ -264,7 +264,8 @@ class _ExpensesTabState extends State<ExpensesTab> {
       final threshold = 0.25;
       if (rawRatio >= threshold) {
         final (start, _) = _getPeriodRange(_period);
-        final marker = '${start.year.toString().padLeft(4, '0')}-${start.month.toString().padLeft(2, '0')}-${start.day.toString().padLeft(2, '0')}';
+        final marker =
+            '${start.year.toString().padLeft(4, '0')}-${start.month.toString().padLeft(2, '0')}-${start.day.toString().padLeft(2, '0')}';
         final flagKey = 'notif_expenses_25_${_period}_$marker';
         final notified = box.get(flagKey) == true;
         if (!notified) {
@@ -745,7 +746,10 @@ class _SummaryHeader extends StatelessWidget {
                     Text(
                       totalLabel,
                       style: Theme.of(context).textTheme.headlineSmall!
-                          .copyWith(fontWeight: FontWeight.w800, color: Colors.red),
+                          .copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: Colors.red,
+                          ),
                     ),
                   ],
                 ),
@@ -1163,12 +1167,12 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
     amountController = TextEditingController(text: amtText);
     dateController = TextEditingController(text: widget.expense['Date'] ?? '');
     noteController = TextEditingController(text: widget.expense['Note'] ?? '');
-  // Initialize possible receipt sources
-  receipt = widget.expense['Receipt'];
-  final lp = (widget.expense['LocalReceiptPath'] ?? '') as String;
-  localPath = lp.isNotEmpty ? lp : null;
-  final ru = (widget.expense['ReceiptUrl'] ?? '') as String;
-  receiptUrl = ru.isNotEmpty ? ru : null;
+    // Initialize possible receipt sources
+    receipt = widget.expense['Receipt'];
+    final lp = (widget.expense['LocalReceiptPath'] ?? '') as String;
+    localPath = lp.isNotEmpty ? lp : null;
+    final ru = (widget.expense['ReceiptUrl'] ?? '') as String;
+    receiptUrl = ru.isNotEmpty ? ru : null;
     if (!categoriesMap.containsKey(selectedCategory)) {
       selectedCategory = null;
       selectedSubcategory = null;
@@ -1680,12 +1684,16 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                       onPressed: _showImageSourceSheet,
                       icon: const Icon(Icons.attachment_outlined),
                       label: Text(
-                        (receipt == null && (localPath ?? '').isEmpty && (receiptUrl ?? '').isEmpty)
+                        (receipt == null &&
+                                (localPath ?? '').isEmpty &&
+                                (receiptUrl ?? '').isEmpty)
                             ? 'Attach Receipt'
                             : 'Change Receipt',
                       ),
                     ),
-                    if (receipt != null || (localPath ?? '').isNotEmpty || (receiptUrl ?? '').isNotEmpty)
+                    if (receipt != null ||
+                        (localPath ?? '').isNotEmpty ||
+                        (receiptUrl ?? '').isNotEmpty)
                       OutlinedButton.icon(
                         onPressed: () => setState(() {
                           receipt = null;
@@ -1748,7 +1756,9 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
       if (receipt != null) 'LocalReceiptPath': null,
       if (receipt != null) 'ReceiptUrl': '',
       // If user removed all sources, ensure all fields are cleared
-      if (receipt == null && (localPath ?? '').isEmpty && (receiptUrl ?? '').isEmpty) ...{
+      if (receipt == null &&
+          (localPath ?? '').isEmpty &&
+          (receiptUrl ?? '').isEmpty) ...{
         'LocalReceiptPath': null,
         'ReceiptUrl': '',
       },

@@ -215,15 +215,15 @@ class _SavingsTabState extends State<SavingsTab> {
       'all_savings' => 'All Savings',
       _ => 'This Month',
     };
-  // Goal based on percent of period savings
-  final box = Hive.box('budgetBox');
-  double goalPercent =
-    ((box.get(_goalPercentKeyForPeriod(_period)) as num?) ?? 0).toDouble();
-  // Fallback to This Month's goal percent when period-specific value is missing
-  if (goalPercent <= 0) {
-    goalPercent =
-      ((box.get('savingsGoalPercent_this_month') as num?) ?? 0).toDouble();
-  }
+    // Goal based on percent of period savings
+    final box = Hive.box('budgetBox');
+    double goalPercent =
+        ((box.get(_goalPercentKeyForPeriod(_period)) as num?) ?? 0).toDouble();
+    // Fallback to This Month's goal percent when period-specific value is missing
+    if (goalPercent <= 0) {
+      goalPercent = ((box.get('savingsGoalPercent_this_month') as num?) ?? 0)
+          .toDouble();
+    }
     final goalVal = (periodSavings * (goalPercent.clamp(0, 100) / 100.0));
     final rawRatioGoal = goalVal > 0 ? (periodNet / goalVal) : 0.0;
     final progressGoal = rawRatioGoal.clamp(0.0, 1.0);
@@ -675,17 +675,20 @@ class _SavingsSummaryHeader extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 6),
-                    Builder(builder: (context) {
-                      // Derive sign from text parsing; if it contains '-' assume negative
-                      final isNegative = netLabel.contains('-');
-                      return Text(
-                        netLabel,
-                        style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(
+                    Builder(
+                      builder: (context) {
+                        // Derive sign from text parsing; if it contains '-' assume negative
+                        final isNegative = netLabel.contains('-');
+                        return Text(
+                          netLabel,
+                          style: Theme.of(context).textTheme.headlineSmall
+                              ?.copyWith(
                                 fontWeight: FontWeight.w800,
-                                color: isNegative ? Colors.red : Colors.green),
-                      );
-                    }),
+                                color: isNegative ? Colors.red : Colors.green,
+                              ),
+                        );
+                      },
+                    ),
                     if (depositsText != null) ...[
                       const SizedBox(height: 2),
                       Text(
@@ -1123,11 +1126,11 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
     amountController = TextEditingController(text: amtText);
     dateController = TextEditingController(text: widget.saving['Date'] ?? '');
     noteController = TextEditingController(text: widget.saving['Note'] ?? '');
-  receipt = widget.saving['Receipt'];
-  final lp = (widget.saving['LocalReceiptPath'] ?? '') as String;
-  localPath = lp.isNotEmpty ? lp : null;
-  final ru = (widget.saving['ReceiptUrl'] ?? '') as String;
-  receiptUrl = ru.isNotEmpty ? ru : null;
+    receipt = widget.saving['Receipt'];
+    final lp = (widget.saving['LocalReceiptPath'] ?? '') as String;
+    localPath = lp.isNotEmpty ? lp : null;
+    final ru = (widget.saving['ReceiptUrl'] ?? '') as String;
+    receiptUrl = ru.isNotEmpty ? ru : null;
     if (!categoriesMap.containsKey(selectedCategory)) {
       selectedCategory = null;
       selectedSubcategory = null;
@@ -1650,12 +1653,16 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
                       onPressed: _showImageSourceSheet,
                       icon: const Icon(Icons.attachment_outlined),
                       label: Text(
-                        (receipt == null && (localPath ?? '').isEmpty && (receiptUrl ?? '').isEmpty)
+                        (receipt == null &&
+                                (localPath ?? '').isEmpty &&
+                                (receiptUrl ?? '').isEmpty)
                             ? 'Attach Image'
                             : 'Change Image',
                       ),
                     ),
-                    if (receipt != null || (localPath ?? '').isNotEmpty || (receiptUrl ?? '').isNotEmpty)
+                    if (receipt != null ||
+                        (localPath ?? '').isNotEmpty ||
+                        (receiptUrl ?? '').isNotEmpty)
                       OutlinedButton.icon(
                         onPressed: () => setState(() {
                           receipt = null;
@@ -1720,7 +1727,9 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
       'Receipt': receipt,
       if (receipt != null) 'LocalReceiptPath': null,
       if (receipt != null) 'ReceiptUrl': '',
-      if (receipt == null && (localPath ?? '').isEmpty && (receiptUrl ?? '').isEmpty) ...{
+      if (receipt == null &&
+          (localPath ?? '').isEmpty &&
+          (receiptUrl ?? '').isEmpty) ...{
         'LocalReceiptPath': null,
         'ReceiptUrl': '',
       },

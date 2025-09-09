@@ -11,7 +11,9 @@ class ReceiptBackupService {
   ReceiptBackupService({required this.accountId, required this.repo});
 
   // Export: create a receipts manifest and ensure local files exist, returning the folder used
-  Future<Directory> exportAll({String subfolderName = 'bb_receipts_backup'}) async {
+  Future<Directory> exportAll({
+    String subfolderName = 'bb_receipts_backup',
+  }) async {
     final docs = await getApplicationDocumentsDirectory();
     final outDir = Directory('${docs.path}/$subfolderName/$accountId');
     await outDir.create(recursive: true);
@@ -57,7 +59,9 @@ class ReceiptBackupService {
     }
 
     final manifestFile = File('${outDir.path}/manifest.json');
-    await manifestFile.writeAsString(const JsonEncoder.withIndent('  ').convert(manifest));
+    await manifestFile.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(manifest),
+    );
     return outDir;
   }
 
@@ -66,7 +70,8 @@ class ReceiptBackupService {
   Future<List<Map<String, dynamic>>> importAll(Directory sourceDir) async {
     final manifestFile = File('${sourceDir.path}/manifest.json');
     if (!await manifestFile.exists()) return [];
-    final manifestRaw = jsonDecode(await manifestFile.readAsString()) as Map<String, dynamic>;
+    final manifestRaw =
+        jsonDecode(await manifestFile.readAsString()) as Map<String, dynamic>;
     final results = <Map<String, dynamic>>[];
     final local = LocalReceiptService();
 
@@ -92,7 +97,10 @@ class ReceiptBackupService {
       await file.copy(destPath);
 
       // Try to map to an existing Firestore doc id by uid
-      final foundDocId = await repo.findDocIdByReceiptUid(collection: collection, receiptUid: uid);
+      final foundDocId = await repo.findDocIdByReceiptUid(
+        collection: collection,
+        receiptUid: uid,
+      );
       results.add({
         'receiptUid': uid,
         'collection': collection,
