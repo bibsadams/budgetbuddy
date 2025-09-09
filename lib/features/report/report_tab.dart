@@ -1,7 +1,11 @@
+import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:intl/intl.dart';
 import 'report_export.dart';
+import 'package:budgetbuddy/widgets/pressable_neumorphic.dart';
+import 'package:budgetbuddy/widgets/app_gradient_background.dart';
 
 class ReportTab extends StatefulWidget {
   final Map<String, List<Map<String, dynamic>>> tableData;
@@ -26,6 +30,8 @@ class _ReportTabState extends State<ReportTab> {
   String allYearsAgg = 'Yearly'; // or 'Quarterly'
   String savingsMode = 'Details'; // or 'Charts'
   String expensesMode = 'Details'; // or 'Charts'
+  bool showMonthDetailsExpenses = false;
+  bool showMonthDetailsSavings = false;
 
   @override
   void initState() {
@@ -38,6 +44,10 @@ class _ReportTabState extends State<ReportTab> {
     allYearsAgg = (_box.get('report_allYearsAgg') as String?) ?? 'Yearly';
     savingsMode = (_box.get('report_savingsMode') as String?) ?? 'Details';
     expensesMode = (_box.get('report_expensesMode') as String?) ?? 'Details';
+    showMonthDetailsExpenses =
+        (_box.get('report_showMonthDetails_exp') as bool?) ?? false;
+    showMonthDetailsSavings =
+        (_box.get('report_showMonthDetails_sav') as bool?) ?? false;
   }
 
   Color _colorForKey(String key) {
@@ -48,16 +58,24 @@ class _ReportTabState extends State<ReportTab> {
   }
 
   bool _passesFilter(Object? dateValue) {
-    if (selectedMonth == 0 && selectedYear == 0) return true;
+    if (selectedMonth == 0 && selectedYear == 0) {
+      return true;
+    }
     DateTime? dt;
     if (dateValue is DateTime) {
       dt = dateValue;
     } else if (dateValue is String) {
       dt = DateTime.tryParse(dateValue);
     }
-    if (dt == null) return false;
-    if (selectedYear != 0 && dt.year != selectedYear) return false;
-    if (selectedMonth != 0 && dt.month != selectedMonth) return false;
+    if (dt == null) {
+      return false;
+    }
+    if (selectedYear != 0 && dt.year != selectedYear) {
+      return false;
+    }
+    if (selectedMonth != 0 && dt.month != selectedMonth) {
+      return false;
+    }
     return true;
   }
 
@@ -70,7 +88,9 @@ class _ReportTabState extends State<ReportTab> {
     final expenseTotals = <String, double>{};
     final expensesBySubcategory = <String, double>{};
     for (final r in expenses) {
-      if (!_passesFilter(r['Date'])) continue;
+      if (!_passesFilter(r['Date'])) {
+        continue;
+      }
       final cat = (r['Category'] ?? r['Name'] ?? 'Uncategorized').toString();
       final amt = (r['Amount'] is num) ? (r['Amount'] as num).toDouble() : 0.0;
       expenseTotals[cat] = (expenseTotals[cat] ?? 0) + amt;
@@ -83,7 +103,9 @@ class _ReportTabState extends State<ReportTab> {
     final savingsByCategory = <String, double>{};
     final savingsBySubcategory = <String, double>{};
     for (final r in savings) {
-      if (!_passesFilter(r['Date'])) continue;
+      if (!_passesFilter(r['Date'])) {
+        continue;
+      }
       final cat = (r['Category'] ?? 'Uncategorized').toString();
       final sub = (r['Subcategory'] ?? 'Unspecified').toString();
       final amt = (r['Amount'] is num) ? (r['Amount'] as num).toDouble() : 0.0;
@@ -94,197 +116,286 @@ class _ReportTabState extends State<ReportTab> {
 
     final entries = expenseTotals.entries.toList();
     entries.sort((a, b) => b.value.compareTo(a.value));
+    final expSubEntries = expensesBySubcategory.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
     final catEntries = savingsByCategory.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
     final subEntries = savingsBySubcategory.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Controls
-          Wrap(
-            runSpacing: 8,
-            spacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              SegmentedButton<String>(
-                segments: const [
-                  ButtonSegment(
-                    value: 'Expenses',
-                    label: Text('Expenses'),
-                    icon: Icon(Icons.payments_outlined),
+    return AppGradientBackground(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Controls
+            PressableNeumorphic(
+              borderRadius: 16,
+              padding: const EdgeInsets.all(12),
+              child: Wrap(
+                runSpacing: 8,
+                spacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment(
+                        value: 'Expenses',
+                        label: Text('Expenses'),
+                        icon: Icon(Icons.payments_outlined),
+                      ),
+                      ButtonSegment(
+                        value: 'Savings',
+                        label: Text('Savings'),
+                        icon: Icon(Icons.savings_outlined),
+                      ),
+                    ],
+                    selected: {view},
+                    onSelectionChanged: (s) => setState(() {
+                      view = s.first;
+                      _box.put('report_view', view);
+                    }),
                   ),
-                  ButtonSegment(
-                    value: 'Savings',
-                    label: Text('Savings'),
-                    icon: Icon(Icons.savings_outlined),
+                  if (view == 'Expenses')
+                    SegmentedButton<String>(
+                      segments: const [
+                        ButtonSegment(
+                          value: 'Details',
+                          label: Text('Details'),
+                          icon: Icon(Icons.view_list),
+                        ),
+                        ButtonSegment(
+                          value: 'Charts',
+                          label: Text('Charts'),
+                          icon: Icon(Icons.pie_chart_outline),
+                        ),
+                      ],
+                      selected: {expensesMode},
+                      onSelectionChanged: (s) => setState(() {
+                        expensesMode = s.first;
+                        _box.put('report_expensesMode', expensesMode);
+                      }),
+                    ),
+                  if (view == 'Expenses')
+                    FilterChip(
+                      label: const Text('Month details'),
+                      selected: showMonthDetailsExpenses,
+                      onSelected: (v) => setState(() {
+                        showMonthDetailsExpenses = v;
+                        _box.put('report_showMonthDetails_exp', v);
+                      }),
+                      selectedColor: Theme.of(
+                        context,
+                      ).colorScheme.secondaryContainer,
+                      avatar: const Icon(Icons.toc, size: 18),
+                    ),
+                  if (view == 'Savings')
+                    SegmentedButton<String>(
+                      segments: const [
+                        ButtonSegment(
+                          value: 'Details',
+                          label: Text('Details'),
+                          icon: Icon(Icons.view_list),
+                        ),
+                        ButtonSegment(
+                          value: 'Charts',
+                          label: Text('Charts'),
+                          icon: Icon(Icons.pie_chart_outline),
+                        ),
+                      ],
+                      selected: {savingsMode},
+                      onSelectionChanged: (s) => setState(() {
+                        savingsMode = s.first;
+                        _box.put('report_savingsMode', savingsMode);
+                      }),
+                    ),
+                  if (view == 'Savings')
+                    FilterChip(
+                      label: const Text('Month details'),
+                      selected: showMonthDetailsSavings,
+                      onSelected: (v) => setState(() {
+                        showMonthDetailsSavings = v;
+                        _box.put('report_showMonthDetails_sav', v);
+                      }),
+                      selectedColor: Theme.of(
+                        context,
+                      ).colorScheme.secondaryContainer,
+                      avatar: const Icon(Icons.toc, size: 18),
+                    ),
+                  _MonthDropdown(
+                    value: selectedMonth,
+                    onChanged: (v) => setState(() {
+                      selectedMonth = v ?? 0;
+                      _box.put('report_month', selectedMonth);
+                    }),
+                  ),
+                  _YearDropdown(
+                    value: selectedYear,
+                    years: _yearsFromData(expenses + savings),
+                    onChanged: (v) => setState(() {
+                      selectedYear = v ?? 0;
+                      _box.put('report_year', selectedYear);
+                    }),
+                  ),
+          // Hide Yearly/Quarterly toggle when 'All years' is selected
+          if ((view == 'Savings' || view == 'Expenses') &&
+            selectedYear != 0)
+                    SegmentedButton<String>(
+                      segments: const [
+                        ButtonSegment(value: 'Yearly', label: Text('Yearly')),
+                        ButtonSegment(
+                          value: 'Quarterly',
+                          label: Text('Quarterly'),
+                        ),
+                      ],
+                      selected: {allYearsAgg},
+                      onSelectionChanged: (s) => setState(() {
+                        allYearsAgg = s.first;
+                        _box.put('report_allYearsAgg', allYearsAgg);
+                      }),
+                    ),
+                  const SizedBox(width: 8),
+                  FilledButton.tonalIcon(
+                    icon: const Icon(Icons.file_download_outlined),
+                    label: const Text('Export CSV'),
+                    onPressed: () async {
+                      if (view == 'Expenses') {
+                        // Build category totals (already filtered)
+                        final rows = [
+                          ['Category', 'Amount (₱)'],
+                          ...expenseTotals.entries.map(
+                            (e) => [
+                              e.key,
+                              NumberFormat.currency(
+                                symbol: '₱',
+                                decimalDigits: 2,
+                              ).format(e.value),
+                            ],
+                          ),
+                          [''],
+                          ['Category • Subcategory', 'Amount (₱)'],
+                          ...expensesBySubcategory.entries.map(
+                            (e) => [
+                              e.key,
+                              NumberFormat.currency(
+                                symbol: '₱',
+                                decimalDigits: 2,
+                              ).format(e.value),
+                            ],
+                          ),
+                        ];
+                        final title = _exportTitle('Expenses');
+                        await ReportExportService.exportCsv(
+                          filename: title,
+                          rows: rows,
+                        );
+                      } else {
+                        final rows = [
+                          ['Category', 'Amount (₱)'],
+                          ...savingsByCategory.entries.map(
+                            (e) => [
+                              e.key,
+                              NumberFormat.currency(
+                                symbol: '₱',
+                                decimalDigits: 2,
+                              ).format(e.value),
+                            ],
+                          ),
+                          [''],
+                          ['Category • Subcategory', 'Amount (₱)'],
+                          ...savingsBySubcategory.entries.map(
+                            (e) => [
+                              e.key,
+                              NumberFormat.currency(
+                                symbol: '₱',
+                                decimalDigits: 2,
+                              ).format(e.value),
+                            ],
+                          ),
+                        ];
+                        final title = _exportTitle('Savings');
+                        await ReportExportService.exportCsv(
+                          filename: title,
+                          rows: rows,
+                        );
+                      }
+                    },
+                  ),
+                  FilledButton.tonalIcon(
+                    icon: const Icon(Icons.picture_as_pdf_outlined),
+                    label: const Text('Export PDF'),
+                    onPressed: () async {
+                      final title = _exportTitle(view);
+                      if (view == 'Expenses') {
+                        await ReportExportService.exportPdf(
+                          filename: title,
+                          title: '$title Report',
+                          byCategory: Map.fromEntries(entries),
+                          bySubcategory: Map.fromEntries(
+                            expensesBySubcategory.entries.toList()
+                              ..sort((a, b) => b.value.compareTo(a.value)),
+                          ),
+                        );
+                      } else {
+                        await ReportExportService.exportPdf(
+                          filename: title,
+                          title: '$title Report',
+                          byCategory: Map.fromEntries(catEntries),
+                          bySubcategory: Map.fromEntries(subEntries),
+                        );
+                      }
+                    },
                   ),
                 ],
-                selected: {view},
-                onSelectionChanged: (s) => setState(() {
-                  view = s.first;
-                  _box.put('report_view', view);
-                }),
               ),
-              if (view == 'Expenses')
-                SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(
-                      value: 'Details',
-                      label: Text('Details'),
-                      icon: Icon(Icons.view_list),
-                    ),
-                    ButtonSegment(
-                      value: 'Charts',
-                      label: Text('Charts'),
-                      icon: Icon(Icons.pie_chart_outline),
-                    ),
-                  ],
-                  selected: {expensesMode},
-                  onSelectionChanged: (s) => setState(() {
-                    expensesMode = s.first;
-                    _box.put('report_expensesMode', expensesMode);
-                  }),
-                ),
-              if (view == 'Savings')
-                SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(
-                      value: 'Details',
-                      label: Text('Details'),
-                      icon: Icon(Icons.view_list),
-                    ),
-                    ButtonSegment(
-                      value: 'Charts',
-                      label: Text('Charts'),
-                      icon: Icon(Icons.pie_chart_outline),
-                    ),
-                  ],
-                  selected: {savingsMode},
-                  onSelectionChanged: (s) => setState(() {
-                    savingsMode = s.first;
-                    _box.put('report_savingsMode', savingsMode);
-                  }),
-                ),
-              _MonthDropdown(
-                value: selectedMonth,
-                onChanged: (v) => setState(() {
-                  selectedMonth = v ?? 0;
-                  _box.put('report_month', selectedMonth);
-                }),
-              ),
-              _YearDropdown(
-                value: selectedYear,
-                years: _yearsFromData(expenses + savings),
-                onChanged: (v) => setState(() {
-                  selectedYear = v ?? 0;
-                  _box.put('report_year', selectedYear);
-                }),
-              ),
-              if ((view == 'Savings' || view == 'Expenses') &&
-                  selectedYear == 0)
-                SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(value: 'Yearly', label: Text('Yearly')),
-                    ButtonSegment(value: 'Quarterly', label: Text('Quarterly')),
-                  ],
-                  selected: {allYearsAgg},
-                  onSelectionChanged: (s) => setState(() {
-                    allYearsAgg = s.first;
-                    _box.put('report_allYearsAgg', allYearsAgg);
-                  }),
-                ),
-              const SizedBox(width: 8),
-              FilledButton.tonalIcon(
-                icon: const Icon(Icons.file_download_outlined),
-                label: const Text('Export CSV'),
-                onPressed: () async {
-                  if (view == 'Expenses') {
-                    // Build category totals (already filtered)
-                    final rows = [
-                      ['Category', 'Amount (₱)'],
-                      ...expenseTotals.entries.map(
-                        (e) => [e.key, e.value.toStringAsFixed(2)],
-                      ),
-                      [''],
-                      ['Category • Subcategory', 'Amount (₱)'],
-                      ...expensesBySubcategory.entries.map(
-                        (e) => [e.key, e.value.toStringAsFixed(2)],
-                      ),
-                    ];
-                    final title = _exportTitle('Expenses');
-                    await ReportExportService.exportCsv(
-                      filename: title,
-                      rows: rows,
-                    );
-                  } else {
-                    final rows = [
-                      ['Category', 'Amount (₱)'],
-                      ...savingsByCategory.entries.map(
-                        (e) => [e.key, e.value.toStringAsFixed(2)],
-                      ),
-                      [''],
-                      ['Category • Subcategory', 'Amount (₱)'],
-                      ...savingsBySubcategory.entries.map(
-                        (e) => [e.key, e.value.toStringAsFixed(2)],
-                      ),
-                    ];
-                    final title = _exportTitle('Savings');
-                    await ReportExportService.exportCsv(
-                      filename: title,
-                      rows: rows,
-                    );
-                  }
-                },
-              ),
-              FilledButton.tonalIcon(
-                icon: const Icon(Icons.picture_as_pdf_outlined),
-                label: const Text('Export PDF'),
-                onPressed: () async {
-                  final title = _exportTitle(view);
-                  if (view == 'Expenses') {
-                    await ReportExportService.exportPdf(
-                      filename: title,
-                      title: '$title Report',
-                      byCategory: Map.fromEntries(entries),
-                      bySubcategory: Map.fromEntries(
-                        expensesBySubcategory.entries.toList()
-                          ..sort((a, b) => b.value.compareTo(a.value)),
-                      ),
-                    );
-                  } else {
-                    await ReportExportService.exportPdf(
-                      filename: title,
-                      title: '$title Report',
-                      byCategory: Map.fromEntries(catEntries),
-                      bySubcategory: Map.fromEntries(subEntries),
-                    );
-                  }
-                },
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
+            ),
+            const SizedBox(height: 12),
 
-          // Body
-          Expanded(
-            child: view == 'Expenses'
-                ? (expensesMode == 'Details'
-                      ? _buildExpensesDetailsView(expenses)
-                      : _buildExpensesCharts(entries, expenses))
-                : (savingsMode == 'Details'
-                      ? _buildSavingsDetailsView(savings)
-                      : _buildSavingsLists(
-                          catEntries,
-                          subEntries,
-                          header: _buildSavingsStackedBarCard(savings),
-                        )),
-          ),
-        ],
+            // Body
+            Expanded(
+              child: view == 'Expenses'
+                  ? (expensesMode == 'Details'
+                        ? _wrapPillow(
+                            _buildExpensesDetailsView(
+                              expenses,
+                              includeMonthDetails: showMonthDetailsExpenses,
+                            ),
+                          )
+                        : _wrapPillow(
+                            _buildExpensesCharts(
+                              entries,
+                              expSubEntries,
+                              expenses,
+                            ),
+                          ))
+                  : (savingsMode == 'Details'
+                        ? _wrapPillow(
+                            _buildSavingsDetailsView(
+                              savings,
+                              includeMonthDetails: showMonthDetailsSavings,
+                            ),
+                          )
+                        : _wrapPillow(
+                            _buildSavingsLists(
+                              catEntries,
+                              subEntries,
+                              header: _buildSavingsStackedBarCard(savings),
+                            ),
+                          )),
+            ),
+          ],
+        ),
       ),
+    );
+  }
+
+  // Wrap any section list/chart in a soft pillow container
+  Widget _wrapPillow(Widget child) {
+    return PressableNeumorphic(
+      borderRadius: 16,
+      padding: const EdgeInsets.all(12),
+      child: child,
     );
   }
 
@@ -292,15 +403,22 @@ class _ReportTabState extends State<ReportTab> {
     String m = selectedMonth == 0
         ? 'AllMonths'
         : selectedMonth.toString().padLeft(2, '0');
-    String y = selectedYear == 0 ? 'AllYears' : selectedYear.toString();
-    return '${base}_$y-$m';
+    final String yText = selectedYear == 0
+        ? 'AllYears'
+        : selectedYear.toString();
+    return '${base}_$yText-$m';
   }
 
   // Detailed Expenses view (mirrors Savings details)
-  Widget _buildExpensesDetailsView(List<Map<String, dynamic>> allExpenses) {
+  Widget _buildExpensesDetailsView(
+    List<Map<String, dynamic>> allExpenses, {
+    bool includeMonthDetails = false,
+  }) {
     final rows = <Map<String, dynamic>>[];
     for (final r in allExpenses) {
-      if (_passesFilter(r['Date'])) rows.add(r);
+      if (_passesFilter(r['Date'])) {
+        rows.add(r);
+      }
     }
     if (rows.isEmpty) {
       return const Center(
@@ -308,13 +426,32 @@ class _ReportTabState extends State<ReportTab> {
       );
     }
 
-    if (selectedYear == 0) {
+    if (includeMonthDetails && selectedYear != 0 && selectedMonth != 0) {
+      // Specific Month/Year: show category + subcategory totals with records toggle
+      return ListView(
+        children: [
+          _CategorySection(
+            title: '${_monthFull(selectedMonth)} $selectedYear',
+            rows: rows,
+            colorFor: _colorForKey,
+            onOpen: (filtered) => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => ExpensesRecordsListPage(rows: filtered),
+              ),
+            ),
+          ),
+        ],
+      );
+    } else if (selectedYear == 0) {
       final byYear = <int, List<Map<String, dynamic>>>{};
       for (final r in rows) {
         final dt = r['Date'] is DateTime
             ? r['Date'] as DateTime
             : DateTime.tryParse((r['Date'] ?? '').toString());
-        if (dt == null) continue;
+        if (dt == null) {
+          continue;
+        }
         byYear.putIfAbsent(dt.year, () => []).add(r);
       }
       final years = byYear.keys.toList()..sort();
@@ -340,7 +477,9 @@ class _ReportTabState extends State<ReportTab> {
         final dt = r['Date'] is DateTime
             ? r['Date'] as DateTime
             : DateTime.tryParse((r['Date'] ?? '').toString());
-        if (dt == null) continue;
+        if (dt == null) {
+          continue;
+        }
         byMonth[dt.month - 1].add(r);
       }
       return ListView(
@@ -380,7 +519,10 @@ class _ReportTabState extends State<ReportTab> {
   }
 
   // Detailed Savings view (like in Savings tab but aggregated)
-  Widget _buildSavingsDetailsView(List<Map<String, dynamic>> allSavings) {
+  Widget _buildSavingsDetailsView(
+    List<Map<String, dynamic>> allSavings, {
+    bool includeMonthDetails = false,
+  }) {
     // Filter rows by current Month/Year filters
     final rows = <Map<String, dynamic>>[];
     for (final r in allSavings) {
@@ -393,7 +535,23 @@ class _ReportTabState extends State<ReportTab> {
     }
 
     // Grouping strategy
-    if (selectedYear == 0) {
+    if (includeMonthDetails && selectedYear != 0 && selectedMonth != 0) {
+      return ListView(
+        children: [
+          _CategorySection(
+            title: '${_monthFull(selectedMonth)} $selectedYear',
+            rows: rows,
+            colorFor: _colorForKey,
+            onOpen: (filtered) => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => SavingsRecordsListPage(rows: filtered),
+              ),
+            ),
+          ),
+        ],
+      );
+    } else if (selectedYear == 0) {
       // Group by Year -> Category -> Subcategory
       final byYear = <int, List<Map<String, dynamic>>>{};
       for (final r in rows) {
@@ -490,9 +648,10 @@ class _ReportTabState extends State<ReportTab> {
   // Expenses charts mode: header stacked bars + small pie
   Widget _buildExpensesCharts(
     List<MapEntry<String, double>> catEntries,
+    List<MapEntry<String, double>> subEntries,
     List<Map<String, dynamic>> allExpenses,
   ) {
-    if (catEntries.isEmpty && allExpenses.isEmpty) {
+    if (catEntries.isEmpty && subEntries.isEmpty && allExpenses.isEmpty) {
       return const Center(
         child: Text('No expense data for the selected period.'),
       );
@@ -529,6 +688,78 @@ class _ReportTabState extends State<ReportTab> {
                               radius: 56,
                             ),
                         ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        const SizedBox(height: 8),
+        if (catEntries.isNotEmpty)
+          Card(
+            elevation: 1,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Expenses by Category',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  ...catEntries.map(
+                    (e) => ListTile(
+                      dense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                      leading: CircleAvatar(
+                        backgroundColor: _colorForKey('EXP:${e.key}'),
+                        radius: 10,
+                      ),
+                      title: Text(e.key),
+                      trailing: Text(
+                        NumberFormat.currency(
+                          symbol: '₱',
+                          decimalDigits: 2,
+                        ).format(e.value),
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        const SizedBox(height: 8),
+        if (subEntries.isNotEmpty)
+          Card(
+            elevation: 1,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Expenses by Subcategory',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 8),
+                  ...subEntries.map(
+                    (e) => ListTile(
+                      dense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                      leading: CircleAvatar(
+                        backgroundColor: _colorForKey('EXP:${e.key}'),
+                        radius: 10,
+                      ),
+                      title: Text(e.key),
+                      trailing: Text(
+                        NumberFormat.currency(
+                          symbol: '₱',
+                          decimalDigits: 2,
+                        ).format(e.value),
+                        style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
                     ),
                   ),
@@ -845,7 +1076,10 @@ class _ReportTabState extends State<ReportTab> {
                     ),
                     title: Text(e.key),
                     trailing: Text(
-                      '₱${e.value.toStringAsFixed(2)}',
+                      NumberFormat.currency(
+                        symbol: '₱',
+                        decimalDigits: 2,
+                      ).format(e.value),
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                   ),
@@ -877,7 +1111,10 @@ class _ReportTabState extends State<ReportTab> {
                     ),
                     title: Text(e.key),
                     trailing: Text(
-                      '₱${e.value.toStringAsFixed(2)}',
+                      NumberFormat.currency(
+                        symbol: '₱',
+                        decimalDigits: 2,
+                      ).format(e.value),
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                   ),
@@ -901,13 +1138,17 @@ class _ReportTabState extends State<ReportTab> {
       for (final r in allSavings) {
         final dv = r['Date'];
         DateTime? dt;
-        if (dv is DateTime)
+        if (dv is DateTime) {
           dt = dv;
-        else if (dv is String)
+        } else if (dv is String) {
           dt = DateTime.tryParse(dv);
-        if (dt == null || dt.year != chosenYear) continue;
-        if (selectedMonth != 0 && dt.month != selectedMonth)
+        }
+        if (dt == null || dt.year != chosenYear) {
+          continue;
+        }
+        if (selectedMonth != 0 && dt.month != selectedMonth) {
           continue; // honor month filter
+        }
         final cat = (r['Category'] ?? 'Uncategorized').toString();
         final amt = (r['Amount'] is num)
             ? (r['Amount'] as num).toDouble()
@@ -987,13 +1228,14 @@ class _ReportTabState extends State<ReportTab> {
       for (final r in allSavings) {
         final dv = r['Date'];
         DateTime? dt;
-        if (dv is DateTime)
+        if (dv is DateTime) {
           dt = dv;
-        else if (dv is String)
+        } else if (dv is String)
           dt = DateTime.tryParse(dv);
         if (dt == null) continue;
-        if (selectedMonth != 0 && dt.month != selectedMonth)
+        if (selectedMonth != 0 && dt.month != selectedMonth) {
           continue; // month filter across all years
+        }
         final cat = (r['Category'] ?? 'Uncategorized').toString();
         final amt = (r['Amount'] is num)
             ? (r['Amount'] as num).toDouble()
@@ -1058,13 +1300,14 @@ class _ReportTabState extends State<ReportTab> {
       for (final r in allSavings) {
         final dv = r['Date'];
         DateTime? dt;
-        if (dv is DateTime)
+        if (dv is DateTime) {
           dt = dv;
-        else if (dv is String)
+        } else if (dv is String)
           dt = DateTime.tryParse(dv);
         if (dt == null) continue;
-        if (selectedMonth != 0 && dt.month != selectedMonth)
+        if (selectedMonth != 0 && dt.month != selectedMonth) {
           continue; // month filter
+        }
         final q = (dt.month - 1) ~/ 3; // 0..3
         final cat = (r['Category'] ?? 'Uncategorized').toString();
         final amt = (r['Amount'] is num)
@@ -1361,7 +1604,10 @@ class _GroupedTotalsTile extends StatelessWidget {
                 ),
                 title: Text(c.key),
                 trailing: Text(
-                  '₱${c.value.toStringAsFixed(2)}',
+                  NumberFormat.currency(
+                    symbol: '₱',
+                    decimalDigits: 2,
+                  ).format(c.value),
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
                 children: [
@@ -1379,7 +1625,12 @@ class _GroupedTotalsTile extends StatelessWidget {
                             contentPadding: const EdgeInsets.only(left: 8),
                             leading: const SizedBox(width: 24),
                             title: Text(s.key),
-                            trailing: Text('₱${s.value.toStringAsFixed(2)}'),
+                            trailing: Text(
+                              NumberFormat.currency(
+                                symbol: '₱',
+                                decimalDigits: 2,
+                              ).format(s.value),
+                            ),
                             onTap: () {
                               // Open records filtered by this category/subcategory
                               final filtered = rows
@@ -1437,9 +1688,9 @@ class SavingsRecordsListPage extends StatelessWidget {
 
   String _fmtDate(Object? dv) {
     DateTime? dt;
-    if (dv is DateTime)
+    if (dv is DateTime) {
       dt = dv;
-    else if (dv is String)
+    } else if (dv is String)
       dt = DateTime.tryParse(dv);
     if (dt == null) return '';
     return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
@@ -1460,27 +1711,51 @@ class SavingsRecordsListPage extends StatelessWidget {
       return dtb.compareTo(dta);
     });
     return Scaffold(
-      appBar: AppBar(title: const Text('Savings Records')),
-      body: ListView.builder(
-        itemCount: items.length,
-        itemBuilder: (context, i) {
-          final r = items[i];
-          final title =
-              '${(r['Category'] ?? '').toString()} • ${(r['Subcategory'] ?? '').toString()}';
-          final note = (r['Note'] ?? '').toString();
-          final date = _fmtDate(r['Date']);
-          final amt = (r['Amount'] is num)
-              ? (r['Amount'] as num).toDouble()
-              : 0.0;
-          return ListTile(
-            title: Text(title),
-            subtitle: Text([date, if (note.isNotEmpty) note].join(' — ')),
-            trailing: Text(
-              '₱${amt.toStringAsFixed(2)}',
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          );
-        },
+      extendBodyBehindAppBar: true,
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        flexibleSpace: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Container(color: Colors.transparent),
+          ),
+        ),
+        title: const Text('Savings Records'),
+      ),
+      body: AppGradientBackground(
+        child: ListView.builder(
+          padding: EdgeInsets.only(
+            top: MediaQuery.of(context).padding.top + kToolbarHeight + 12,
+            left: 12,
+            right: 12,
+            bottom: 12,
+          ),
+          itemCount: items.length,
+          itemBuilder: (context, i) {
+            final r = items[i];
+            final title =
+                '${(r['Category'] ?? '').toString()} • ${(r['Subcategory'] ?? '').toString()}';
+            final note = (r['Note'] ?? '').toString();
+            final date = _fmtDate(r['Date']);
+            final amt = (r['Amount'] is num)
+                ? (r['Amount'] as num).toDouble()
+                : 0.0;
+            return ListTile(
+              title: Text(title),
+              subtitle: Text([date, if (note.isNotEmpty) note].join(' — ')),
+              trailing: Text(
+                NumberFormat.currency(
+                  symbol: '₱',
+                  decimalDigits: 2,
+                ).format(amt),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -1492,9 +1767,9 @@ class ExpensesRecordsListPage extends StatelessWidget {
 
   String _fmtDate(Object? dv) {
     DateTime? dt;
-    if (dv is DateTime)
+    if (dv is DateTime) {
       dt = dv;
-    else if (dv is String)
+    } else if (dv is String)
       dt = DateTime.tryParse(dv);
     if (dt == null) return '';
     return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
@@ -1515,27 +1790,51 @@ class ExpensesRecordsListPage extends StatelessWidget {
       return dtb.compareTo(dta);
     });
     return Scaffold(
-      appBar: AppBar(title: const Text('Expense Records')),
-      body: ListView.builder(
-        itemCount: items.length,
-        itemBuilder: (context, i) {
-          final r = items[i];
-          final title =
-              '${(r['Category'] ?? '').toString()} • ${(r['Subcategory'] ?? '').toString()}';
-          final note = (r['Note'] ?? '').toString();
-          final date = _fmtDate(r['Date']);
-          final amt = (r['Amount'] is num)
-              ? (r['Amount'] as num).toDouble()
-              : 0.0;
-          return ListTile(
-            title: Text(title),
-            subtitle: Text([date, if (note.isNotEmpty) note].join(' — ')),
-            trailing: Text(
-              '₱${amt.toStringAsFixed(2)}',
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-          );
-        },
+      extendBodyBehindAppBar: true,
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        flexibleSpace: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Container(color: Colors.transparent),
+          ),
+        ),
+        title: const Text('Expense Records'),
+      ),
+      body: AppGradientBackground(
+        child: ListView.builder(
+          padding: EdgeInsets.only(
+            top: MediaQuery.of(context).padding.top + kToolbarHeight + 12,
+            left: 12,
+            right: 12,
+            bottom: 12,
+          ),
+          itemCount: items.length,
+          itemBuilder: (context, i) {
+            final r = items[i];
+            final title =
+                '${(r['Category'] ?? '').toString()} • ${(r['Subcategory'] ?? '').toString()}';
+            final note = (r['Note'] ?? '').toString();
+            final date = _fmtDate(r['Date']);
+            final amt = (r['Amount'] is num)
+                ? (r['Amount'] as num).toDouble()
+                : 0.0;
+            return ListTile(
+              title: Text(title),
+              subtitle: Text([date, if (note.isNotEmpty) note].join(' — ')),
+              trailing: Text(
+                NumberFormat.currency(
+                  symbol: '₱',
+                  decimalDigits: 2,
+                ).format(amt),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            );
+          },
+        ),
       ),
     );
   }

@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import 'package:fl_chart/fl_chart.dart'; // Add this in pubspec.yaml
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:intl/intl.dart';
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 import 'features/expenses/expenses_tab.dart';
 
 class HomeTabsPage extends StatefulWidget {
@@ -215,9 +216,19 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
     return DefaultTabController(
       length: tabs.length + 1,
       child: Scaffold(
+        extendBodyBehindAppBar: true,
+        backgroundColor: Colors.transparent,
         appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          flexibleSpace: ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: Container(color: Colors.transparent),
+            ),
+          ),
           title: const Text('BudgetBuddy'),
-          elevation: 4,
           shape: const RoundedRectangleBorder(
             borderRadius: BorderRadius.vertical(bottom: Radius.circular(16)),
           ),
@@ -244,10 +255,12 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
               if (tab == 'Bills') return buildBillsTab();
               if (tab == 'Expenses') {
                 final rows = tableData['Expenses'] ?? [];
+                final savingsRows = tableData['Savings'] ?? [];
                 final limit = tabLimits['Expenses'];
                 return ExpensesTab(
                   rows: rows,
                   limit: limit,
+                  savingsRows: savingsRows,
                   onRowsChanged: (newRows) {
                     setState(() {
                       tableData['Expenses'] = newRows;
@@ -255,33 +268,71 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
                     });
                   },
                   onSetLimit: () {
-                    final ctrl = TextEditingController(
-                      text: (tabLimits['Expenses'] ?? 0.0).toString(),
+                    final valueCtrl = TextEditingController(
+                      text: (box.get('expensesLimitPercent') ?? '').toString(),
                     );
                     showDialog(
                       context: context,
-                      builder: (_) => AlertDialog(
-                        title: const Text("Set Limit"),
-                        content: TextField(
-                          controller: ctrl,
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(
-                            hintText: "Enter limit amount",
-                          ),
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () {
-                              setState(() {
-                                tabLimits['Expenses'] =
-                                    double.tryParse(ctrl.text) ?? 0.0;
-                                saveData();
-                                Navigator.pop(context);
-                              });
-                            },
-                            child: const Text("Save"),
-                          ),
-                        ],
+                      builder: (_) => StatefulBuilder(
+                        builder: (ctx, setLocal) {
+                          final currentPeriod =
+                              (box.get('expensesSummaryPeriod') as String?) ??
+                              'month';
+                          final periodWord = switch (currentPeriod) {
+                            'week' => 'weekly',
+                            'quarter' => 'quarterly',
+                            _ => 'monthly',
+                          };
+                          final helper = 'Percent of $periodWord saving';
+                          return AlertDialog(
+                            title: const Text("Set Limit"),
+                            content: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                TextField(
+                                  controller: valueCtrl,
+                                  keyboardType: TextInputType.number,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Percent',
+                                    suffixText: '%',
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Text(
+                                    helper,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context),
+                                child: const Text("Cancel"),
+                              ),
+                              TextButton(
+                                onPressed: () {
+                                  setState(() {
+                                    final numVal = double.tryParse(
+                                      valueCtrl.text,
+                                    );
+                                    box.put(
+                                      'expensesLimitPercent',
+                                      (numVal ?? 0).clamp(0.0, 100.0),
+                                    );
+                                    saveData();
+                                  });
+                                  Navigator.pop(context);
+                                },
+                                child: const Text("Save"),
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     );
                   },
@@ -315,96 +366,209 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
     final random = DateTime.now().millisecondsSinceEpoch;
     return Color(
       (0xFF000000 + (random ^ _categoryColors.length * 997) % 0xFFFFFF),
-    ).withOpacity(1.0);
+    ).withValues(alpha: 1.0);
   }
 
-  int touchedIndex = -1; // Add this in your _HomeTabsPageState
+  // Month/Year selection state for Home Report
+  int _reportMonth = DateTime.now().month; // 1..12
+  int _reportYear = DateTime.now().year;
+  bool _showSavingsByCat = true;
+  bool _showSavingsBySub = false;
+  bool _showExpensesByCat = true;
+  bool _showExpensesBySub = false;
 
   Widget buildReportTab() {
-    Map<String, double> categoryTotals = {};
     final expenses = tableData['Expenses'] ?? [];
+    final savings = tableData['Savings'] ?? [];
 
-    for (var row in expenses) {
-      String category = (row['Category'] ?? row['Name'] ?? 'Uncategorized')
-          .toString();
-      double amount = row['Amount'] ?? 0.0;
-      categoryTotals[category] = (categoryTotals[category] ?? 0) + amount;
-      _categoryColors.putIfAbsent(category, () => getRandomColor());
+    bool pass(Object? date) {
+      DateTime? dt;
+      if (date is DateTime) dt = date;
+      if (dt == null && date is String) dt = DateTime.tryParse(date);
+      if (dt == null) return false;
+      return dt.year == _reportYear && dt.month == _reportMonth;
     }
 
-    final entries = categoryTotals.entries.toList();
+    String monthLabel(int m) => DateFormat.MMM().format(DateTime(2000, m));
+    final header = '${monthLabel(_reportMonth)} ${_reportYear}';
+
+    // Filtered rows
+    final expRows = expenses.where((r) => pass(r['Date'])).toList();
+    final savRows = savings.where((r) => pass(r['Date'])).toList();
+
+    // Aggregations
+    Map<String, double> _sumByCat(List<Map<String, dynamic>> rows) {
+      final map = <String, double>{};
+      for (final r in rows) {
+        final cat = (r['Category'] ?? r['Name'] ?? 'Uncategorized').toString();
+        final amt = (r['Amount'] is num)
+            ? (r['Amount'] as num).toDouble()
+            : 0.0;
+        map[cat] = (map[cat] ?? 0) + amt;
+      }
+      return map;
+    }
+
+    Map<String, double> _sumBySub(List<Map<String, dynamic>> rows) {
+      final map = <String, double>{};
+      for (final r in rows) {
+        final cat = (r['Category'] ?? r['Name'] ?? 'Uncategorized').toString();
+        final sub = (r['Subcategory'] ?? 'Unspecified').toString();
+        final key = '$cat • $sub';
+        final amt = (r['Amount'] is num)
+            ? (r['Amount'] as num).toDouble()
+            : 0.0;
+        map[key] = (map[key] ?? 0) + amt;
+      }
+      return map;
+    }
+
+    final expByCat = _sumByCat(expRows);
+    final expBySub = _sumBySub(expRows);
+    final savByCat = _sumByCat(savRows);
+    final savBySub = _sumBySub(savRows);
+
+    List<DropdownMenuItem<int>> _yearItems() {
+      final years = <int>{_reportYear};
+      for (final r in expenses + savings) {
+        final d = r['Date'];
+        DateTime? dt;
+        if (d is DateTime)
+          dt = d;
+        else if (d is String)
+          dt = DateTime.tryParse(d);
+        if (dt != null) years.add(dt.year);
+      }
+      final list = years.toList()..sort();
+      return list
+          .map((y) => DropdownMenuItem(value: y, child: Text('$y')))
+          .toList();
+    }
+
+    final currency = NumberFormat.currency(symbol: '₱', decimalDigits: 2);
 
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
-            "Spending Insights",
-            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 16),
-          Expanded(
-            child: entries.isEmpty
-                ? const Center(child: Text("No expense data available."))
-                : Card(
-                    elevation: 4,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: PieChart(
-                        PieChartData(
-                          sectionsSpace: 4,
-                          centerSpaceRadius: 60,
-                          pieTouchData: PieTouchData(
-                            touchCallback: (event, response) {
-                              setState(() {
-                                touchedIndex =
-                                    response
-                                        ?.touchedSection
-                                        ?.touchedSectionIndex ??
-                                    -1;
-                              });
-                            },
-                          ),
-                          sections: List.generate(entries.length, (i) {
-                            final entry = entries[i];
-                            final isTouched = i == touchedIndex;
-                            final double fontSize = isTouched ? 16 : 12;
-                            final double radius = isTouched ? 90 : 70;
-
-                            return PieChartSectionData(
-                              value: entry.value,
-                              title: isTouched
-                                  ? "${entry.key}\n₱${entry.value.toStringAsFixed(0)}"
-                                  : '',
-                              color: _categoryColors[entry.key],
-                              radius: radius,
-                              titleStyle: TextStyle(
-                                fontSize: fontSize,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            );
-                          }),
-                        ),
-                      ),
-                    ),
-                  ),
-          ),
-          if (touchedIndex != -1)
-            Padding(
-              padding: const EdgeInsets.only(top: 16.0),
-              child: Center(
+          // Header and selectors
+          Row(
+            children: [
+              Expanded(
                 child: Text(
-                  "${entries[touchedIndex].key}: ₱${entries[touchedIndex].value.toStringAsFixed(2)}",
+                  'Report — $header',
                   style: const TextStyle(
-                    fontSize: 18,
+                    fontSize: 22,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
               ),
+              DropdownButton<int>(
+                value: _reportMonth,
+                onChanged: (v) =>
+                    setState(() => _reportMonth = v ?? _reportMonth),
+                items: List.generate(12, (i) {
+                  final m = i + 1;
+                  return DropdownMenuItem(value: m, child: Text(monthLabel(m)));
+                }),
+              ),
+              const SizedBox(width: 8),
+              DropdownButton<int>(
+                value: _reportYear,
+                onChanged: (v) =>
+                    setState(() => _reportYear = v ?? _reportYear),
+                items: _yearItems(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          // Toggles
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilterChip(
+                label: const Text('Savings by Category'),
+                selected: _showSavingsByCat,
+                onSelected: (v) => setState(() => _showSavingsByCat = v),
+              ),
+              FilterChip(
+                label: const Text('Savings by Subcategory'),
+                selected: _showSavingsBySub,
+                onSelected: (v) => setState(() => _showSavingsBySub = v),
+              ),
+              FilterChip(
+                label: const Text('Expenses by Category'),
+                selected: _showExpensesByCat,
+                onSelected: (v) => setState(() => _showExpensesByCat = v),
+              ),
+              FilterChip(
+                label: const Text('Expenses by Subcategory'),
+                selected: _showExpensesBySub,
+                onSelected: (v) => setState(() => _showExpensesBySub = v),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          // Details lists (no bars/charts)
+          Expanded(
+            child: ListView(
+              children: [
+                if (_showSavingsByCat)
+                  _buildAggSection('Savings by Category', savByCat, currency),
+                if (_showSavingsBySub)
+                  _buildAggSection(
+                    'Savings by Subcategory',
+                    savBySub,
+                    currency,
+                  ),
+                if (_showExpensesByCat)
+                  _buildAggSection('Expenses by Category', expByCat, currency),
+                if (_showExpensesBySub)
+                  _buildAggSection(
+                    'Expenses by Subcategory',
+                    expBySub,
+                    currency,
+                  ),
+              ],
             ),
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildAggSection(
+    String title,
+    Map<String, double> data,
+    NumberFormat currency,
+  ) {
+    final entries = data.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return Card(
+      elevation: 2,
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      child: ExpansionTile(
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text(
+          '${entries.length} ${(entries.length == 1) ? 'item' : 'items'}',
+        ),
+        children: entries.isEmpty
+            ? [const ListTile(title: Text('No data for selection'))]
+            : entries
+                  .map(
+                    (e) => ListTile(
+                      title: Text(e.key),
+                      trailing: Text(
+                        currency.format(e.value),
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  )
+                  .toList(),
       ),
     );
   }
@@ -488,7 +652,7 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
 
               const SizedBox(height: 8),
               Text(
-                "Saved: ₱${savedTotal.toStringAsFixed(2)} / ₱${goal.toStringAsFixed(2)}",
+                "Saved: ${NumberFormat.currency(symbol: '₱', decimalDigits: 2).format(savedTotal)} / ${NumberFormat.currency(symbol: '₱', decimalDigits: 2).format(goal)}",
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             ],
@@ -523,7 +687,7 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
               return ListTile(
                 title: Text(row['Name'] ?? ''),
                 subtitle: Text(
-                  "₱${row['Amount']?.toStringAsFixed(2) ?? ''} - Due: ${row['Due Date'] ?? ''}",
+                  "${row['Amount'] == null ? '' : NumberFormat.currency(symbol: '₱', decimalDigits: 2).format(row['Amount'])} - Due: ${row['Due Date'] ?? ''}",
                 ),
                 trailing: IconButton(
                   icon: const Icon(Icons.edit),
@@ -669,11 +833,11 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
                   children: [
                     if (limit != null)
                       Text(
-                        "Limit: ₱${limit.toStringAsFixed(2)}",
+                        "Limit: ${NumberFormat.currency(symbol: '₱', decimalDigits: 2).format(limit)}",
                         style: const TextStyle(color: Colors.redAccent),
                       ),
                     Text(
-                      "Total: ₱${total.toStringAsFixed(2)}",
+                      "Total: ${NumberFormat.currency(symbol: '₱', decimalDigits: 2).format(total)}",
                       style: TextStyle(
                         color: limit != null && total > limit
                             ? Colors.red

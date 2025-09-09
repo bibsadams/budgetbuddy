@@ -4,6 +4,11 @@ import 'package:hive/hive.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui';
+import 'package:image/image.dart' as img;
+import 'package:budgetbuddy/widgets/pressable_neumorphic.dart';
+import 'package:budgetbuddy/widgets/app_gradient_background.dart';
 
 class SavingsTab extends StatefulWidget {
   final List<Map<String, dynamic>> rows;
@@ -29,7 +34,25 @@ class _SavingsTabState extends State<SavingsTab> {
   final TextEditingController _searchCtrl = TextEditingController();
   String _query = '';
   String _sort = 'Date (newest)';
-  bool _showAllAgg = false;
+  bool _searchExpanded = false; // animated, collapsible search field
+  // Period options for header: this_week | this_month | last_week | last_month
+  String _period = 'this_month';
+
+  @override
+  void initState() {
+    super.initState();
+    final saved = Hive.box('budgetBox').get('savingsSummaryPeriod');
+    if (saved is String &&
+        [
+          'this_week',
+          'this_month',
+          'last_week',
+          'last_month',
+          'all_savings',
+        ].contains(saved)) {
+      _period = saved;
+    }
+  }
 
   @override
   void dispose() {
@@ -97,210 +120,322 @@ class _SavingsTabState extends State<SavingsTab> {
     return list;
   }
 
-  // Finalized thresholds:
-  // Goal bar colors: green >=100%, amber 50–99%, red <50%.
-  Color _goalColor(double progress) {
-    if (progress >= 1.0) return Colors.green;
-    if (progress >= 0.5) return Colors.amber;
-    return Colors.red;
+  // Period helpers
+  (DateTime, DateTime) _getPeriodRange(String period) {
+    final now = DateTime.now();
+    final startOfThisWeek = now
+        .subtract(Duration(days: now.weekday % 7))
+        .copyWith(
+          hour: 0,
+          minute: 0,
+          second: 0,
+          millisecond: 0,
+          microsecond: 0,
+        );
+    final startOfNextWeek = startOfThisWeek.add(const Duration(days: 7));
+    final startOfThisMonth = DateTime(now.year, now.month, 1);
+    final startOfNextMonth = DateTime(now.year, now.month + 1, 1);
+    final startOfLastMonth = DateTime(now.year, now.month - 1, 1);
+    final startOfThisWeekPrev = startOfThisWeek.subtract(
+      const Duration(days: 7),
+    );
+    switch (period) {
+      case 'this_week':
+        return (startOfThisWeek, startOfNextWeek);
+      case 'last_week':
+        return (startOfThisWeekPrev, startOfThisWeek);
+      case 'last_month':
+        return (startOfLastMonth, startOfThisMonth);
+      case 'this_month':
+      default:
+        return (startOfThisMonth, startOfNextMonth);
+    }
   }
 
-  // Net savings colors: green >= 0; amber between -10% and 0 of goal; red < -10% of goal.
-  Color _netColor({required double net, required double goal}) {
-    if (net >= 0) return Colors.green;
-    if (goal > 0) {
-      final threshold = -0.1 * goal;
-      if (net >= threshold) return Colors.amber;
-      return Colors.red;
+  double _sumForPeriod(List<Map<String, dynamic>> rows) {
+    double sum = 0.0;
+    // If showing all savings, ignore date filtering
+    if (_period == 'all_savings') {
+      for (final row in rows) {
+        final a = row['Amount'];
+        if (a is num) sum += a.toDouble();
+      }
+      return sum;
     }
-    // No goal set: use red for negatives
-    return Colors.red;
+    final (start, end) = _getPeriodRange(_period);
+    for (final row in rows) {
+      final ds = (row['Date'] ?? '').toString();
+      if (ds.isEmpty) continue;
+      final dt = DateTime.tryParse(ds);
+      if (dt == null) continue;
+      final include = !dt.isBefore(start) && dt.isBefore(end);
+      if (!include) continue;
+      final a = row['Amount'];
+      if (a is num) sum += a.toDouble();
+    }
+    return sum;
   }
+
+  String _goalPercentKeyForPeriod(String period) {
+    switch (period) {
+      case 'this_week':
+        return 'savingsGoalPercent_this_week';
+      case 'last_week':
+        return 'savingsGoalPercent_last_week';
+      case 'last_month':
+        return 'savingsGoalPercent_last_month';
+      case 'all_savings':
+        return 'savingsGoalPercent_all_savings';
+      case 'this_month':
+      default:
+        return 'savingsGoalPercent_this_month';
+    }
+  }
+
+  void _setPeriod(String p) {
+    setState(() => _period = p);
+    Hive.box('budgetBox').put('savingsSummaryPeriod', p);
+  }
+
+  // Net/Goal sections combined back to original summary header.
 
   @override
   Widget build(BuildContext context) {
     final currency = NumberFormat.currency(symbol: '₱', decimalDigits: 2);
     final rows = widget.rows;
     final expensesRows = widget.expensesRows;
-    final totalSaved = rows.fold<double>(
-      0.0,
-      (sum, row) =>
-          sum + (row['Amount'] is num ? (row['Amount'] as num).toDouble() : 0),
-    );
-    final totalExpenses = expensesRows.fold<double>(
-      0.0,
-      (sum, row) =>
-          sum + (row['Amount'] is num ? (row['Amount'] as num).toDouble() : 0),
-    );
-    final netSavedRaw = (totalSaved - totalExpenses);
-    final goalVal = widget.goal ?? 0.0;
-    final progressGoal = goalVal > 0
-        ? (totalSaved / goalVal).clamp(0.0, 1.0)
-        : 0.0;
-    final remainingGoalRatio = goalVal > 0
-        ? ((goalVal - totalSaved).clamp(0.0, goalVal) / goalVal)
-        : 1.0;
-    // Represent net savings progress relative to goal when available; clamp to [0,1] for progress bar.
-    final progressNet = goalVal > 0
-        ? (netSavedRaw / goalVal).clamp(0.0, 1.0)
-        : (totalSaved > 0 ? (netSavedRaw / totalSaved).clamp(0.0, 1.0) : 0.0);
+    // Period-based totals
+    final periodSavings = _sumForPeriod(rows);
+    final periodExpenses = _sumForPeriod(expensesRows);
+    final periodNet = periodSavings - periodExpenses;
+    final periodLabel = switch (_period) {
+      'this_week' => 'This Week',
+      'last_week' => 'Last Week',
+      'last_month' => 'Last Month',
+      'all_savings' => 'All Savings',
+      _ => 'This Month',
+    };
+  // Goal based on percent of period savings
+  final box = Hive.box('budgetBox');
+  double goalPercent =
+    ((box.get(_goalPercentKeyForPeriod(_period)) as num?) ?? 0).toDouble();
+  // Fallback to This Month's goal percent when period-specific value is missing
+  if (goalPercent <= 0) {
+    goalPercent =
+      ((box.get('savingsGoalPercent_this_month') as num?) ?? 0).toDouble();
+  }
+    final goalVal = (periodSavings * (goalPercent.clamp(0, 100) / 100.0));
+    final rawRatioGoal = goalVal > 0 ? (periodNet / goalVal) : 0.0;
+    final progressGoal = rawRatioGoal.clamp(0.0, 1.0);
+    final depositsText =
+        'Total Deposit $periodLabel: ${currency.format(periodSavings)}';
 
     return Scaffold(
-      body: CustomScrollView(
-        slivers: [
-          // Goal section
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: _GoalSection(
-                goalLabel: widget.goal != null
-                    ? currency.format(goalVal)
-                    : null,
-                progress: progressGoal,
-                remainingRatio: remainingGoalRatio,
-                onSetGoal: widget.onSetGoal,
-                color: _goalColor(progressGoal),
-              ),
-            ),
-          ),
-          // Net savings section
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-              child: _NetSavingsSection(
-                netLabel: currency.format(netSavedRaw),
-                totalLabel: currency.format(totalSaved),
-                expensesLabel: currency.format(totalExpenses),
-                progress: progressNet,
-                color: _netColor(net: netSavedRaw, goal: goalVal),
-              ),
-            ),
-          ),
-          // Aggregation (Savings by subcategory)
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: _AggregationSection(
-                rows: rows,
-                showAll: _showAllAgg,
-                onToggle: () => setState(() => _showAllAgg = !_showAllAgg),
-                currency: currency,
-              ),
-            ),
-          ),
-          const SliverToBoxAdapter(child: SizedBox(height: 8)),
-          // Search + sort controls
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _searchCtrl,
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(Icons.search),
-                        hintText: 'Search savings…',
-                        border: OutlineInputBorder(),
-                      ),
-                      onChanged: (v) => setState(() => _query = v),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  PopupMenuButton<String>(
-                    tooltip: 'Sort',
-                    onSelected: (v) => setState(() => _sort = v),
-                    itemBuilder: (ctx) => const [
-                      PopupMenuItem(
-                        value: 'Date (newest)',
-                        child: Text('Date (newest)'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Date (oldest)',
-                        child: Text('Date (oldest)'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Amount (high → low)',
-                        child: Text('Amount (high → low)'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Amount (low → high)',
-                        child: Text('Amount (low → high)'),
-                      ),
-                      PopupMenuItem(
-                        value: 'Category (A → Z)',
-                        child: Text('Category (A → Z)'),
-                      ),
-                    ],
-                    child: OutlinedButton.icon(
-                      onPressed: null,
-                      icon: const Icon(Icons.sort),
-                      label: Text(_sort),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (rows.isEmpty)
-            const SliverFillRemaining(
-              hasScrollBody: false,
-              child: Center(
-                child: Text(
-                  "No savings yet. Tap '+' to add.",
-                  style: TextStyle(fontSize: 16, color: Colors.grey),
+      backgroundColor: Colors.transparent,
+      body: AppGradientBackground(
+        child: CustomScrollView(
+          slivers: [
+            // Summary header with period dropdown and net amount
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: _SavingsSummaryHeader(
+                  periodLabel: periodLabel,
+                  currentPeriodKey: _period,
+                  onChangePeriod: _setPeriod,
+                  netLabel: currency.format(periodNet),
+                  progress: progressGoal,
+                  rawProgress: rawRatioGoal,
+                  goalLabel: goalVal > 0 ? currency.format(goalVal) : null,
+                  goalPercent: goalPercent,
+                  onSetGoal: widget.onSetGoal,
+                  depositsText: depositsText,
                 ),
               ),
-            )
-          else
-            SliverList.builder(
-              itemCount: _filteredAndSorted().length,
-              itemBuilder: (context, index) {
-                final displayRows = _filteredAndSorted();
-                final row = displayRows[index];
-                final originalIndex = _findOriginalIndex(rows, row);
-                return _SavingCard(
-                  row: row,
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => SavingsDetailsPage(
-                          saving: row,
-                          onEdit: (updatedSaving) {
-                            final newRows = List<Map<String, dynamic>>.from(
-                              rows,
-                            );
-                            if (originalIndex >= 0) {
-                              newRows[originalIndex] = {
-                                ...rows[originalIndex],
-                                ...updatedSaving,
-                                'id':
-                                    rows[originalIndex]['id'] ??
-                                    updatedSaving['id'],
-                              };
-                            }
-                            widget.onRowsChanged(newRows);
-                            Navigator.pop(context);
-                          },
-                          onDelete: () {
-                            final newRows = List<Map<String, dynamic>>.from(
-                              rows,
-                            );
-                            if (originalIndex >= 0)
-                              newRows.removeAt(originalIndex);
-                            widget.onRowsChanged(newRows);
-                            Navigator.pop(context);
-                          },
+            ),
+            // Aggregation removed per request
+            // Search + Filter retained
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 220),
+                      transitionBuilder: (child, anim) => FadeTransition(
+                        opacity: anim,
+                        child: ScaleTransition(
+                          scale: Tween<double>(
+                            begin: 0.95,
+                            end: 1.0,
+                          ).animate(anim),
+                          child: child,
                         ),
                       ),
-                    );
-                  },
-                );
-              },
+                      child: _searchExpanded
+                          ? Container(
+                              key: const ValueKey('search-expanded'),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.surface.withValues(alpha: 0.6),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.search, size: 20),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: TextField(
+                                      controller: _searchCtrl,
+                                      autofocus: true,
+                                      decoration: const InputDecoration(
+                                        hintText: 'Search savings…',
+                                        isDense: true,
+                                        border: InputBorder.none,
+                                      ),
+                                      onChanged: (v) =>
+                                          setState(() => _query = v),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Clear',
+                                    icon: const Icon(Icons.close, size: 20),
+                                    onPressed: () {
+                                      setState(() {
+                                        _searchCtrl.clear();
+                                        _query = '';
+                                        _searchExpanded = false;
+                                      });
+                                    },
+                                  ),
+                                ],
+                              ),
+                            )
+                          : const SizedBox.shrink(
+                              key: ValueKey('search-collapsed'),
+                            ),
+                    ),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Search icon (expands field above)
+                          PressableNeumorphic(
+                            borderRadius: 24,
+                            padding: const EdgeInsets.all(8),
+                            onTap: () => setState(() {
+                              _searchExpanded = true;
+                            }),
+                            child: const Icon(Icons.search),
+                          ),
+                          const SizedBox(width: 8),
+                          // Filter/Sort icon (popup menu)
+                          PopupMenuButton<String>(
+                            tooltip: 'Sort',
+                            onSelected: (v) => setState(() => _sort = v),
+                            itemBuilder: (ctx) => const [
+                              PopupMenuItem(
+                                value: 'Date (newest)',
+                                child: Text('Date (newest)'),
+                              ),
+                              PopupMenuItem(
+                                value: 'Date (oldest)',
+                                child: Text('Date (oldest)'),
+                              ),
+                              PopupMenuItem(
+                                value: 'Amount (high → low)',
+                                child: Text('Amount (high → low)'),
+                              ),
+                              PopupMenuItem(
+                                value: 'Amount (low → high)',
+                                child: Text('Amount (low → high)'),
+                              ),
+                              PopupMenuItem(
+                                value: 'Category (A → Z)',
+                                child: Text('Category (A → Z)'),
+                              ),
+                            ],
+                            child: PressableNeumorphic(
+                              borderRadius: 24,
+                              padding: const EdgeInsets.all(8),
+                              child: const Icon(Icons.filter_list),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-          const SliverToBoxAdapter(child: SizedBox(height: 96)),
-        ],
+            if (rows.isEmpty)
+              const SliverFillRemaining(
+                hasScrollBody: false,
+                child: Center(
+                  child: Text(
+                    "No savings yet. Tap '+' to add.",
+                    style: TextStyle(fontSize: 16, color: Colors.grey),
+                  ),
+                ),
+              )
+            else
+              SliverList.builder(
+                itemCount: _filteredAndSorted().length,
+                itemBuilder: (context, index) {
+                  final displayRows = _filteredAndSorted();
+                  final row = displayRows[index];
+                  final originalIndex = _findOriginalIndex(rows, row);
+                  return _SavingCard(
+                    row: row,
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => SavingsDetailsPage(
+                            saving: row,
+                            onEdit: (updatedSaving) {
+                              final newRows = List<Map<String, dynamic>>.from(
+                                rows,
+                              );
+                              if (originalIndex >= 0) {
+                                newRows[originalIndex] = {
+                                  ...rows[originalIndex],
+                                  ...updatedSaving,
+                                  'id':
+                                      rows[originalIndex]['id'] ??
+                                      updatedSaving['id'],
+                                };
+                              }
+                              widget.onRowsChanged(newRows);
+                              Navigator.pop(context);
+                            },
+                            onDelete: () {
+                              final newRows = List<Map<String, dynamic>>.from(
+                                rows,
+                              );
+                              if (originalIndex >= 0) {
+                                newRows.removeAt(originalIndex);
+                              }
+                              widget.onRowsChanged(newRows);
+                              Navigator.pop(context);
+                            },
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            const SliverToBoxAdapter(child: SizedBox(height: 96)),
+          ],
+        ),
       ),
       floatingActionButton: FloatingActionButton.extended(
         heroTag: 'savings-fab',
@@ -367,347 +502,348 @@ class _SavingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final currency = NumberFormat.currency(symbol: '₱', decimalDigits: 2);
-    return Card(
-      color: Theme.of(context).colorScheme.surface,
-      elevation: 0,
-      margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 14),
+      child: PressableNeumorphic(
+        borderRadius: 16,
+        padding: const EdgeInsets.all(16),
         onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: _savingsCategoryColor(
-                    context,
-                    (row['Category'] ?? row['Name'] ?? '') as String?,
-                  ),
-                  borderRadius: BorderRadius.circular(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: _savingsCategoryColor(
+                  context,
+                  (row['Category'] ?? row['Name'] ?? '') as String?,
                 ),
-                child: Icon(
-                  _savingsCategoryIcon(
-                    (row['Category'] ?? row['Name'] ?? '') as String?,
-                  ),
-                  size: 22,
-                  color: Theme.of(context).colorScheme.onPrimaryContainer,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      [
-                        (row['Category'] ?? row['Name'] ?? 'No Category')
-                            .toString(),
-                        if (((row['Subcategory'] ?? '') as String)
-                            .toString()
-                            .trim()
-                            .isNotEmpty)
-                          (row['Subcategory']).toString(),
-                      ].join(' • '),
-                      style: Theme.of(context).textTheme.titleMedium!.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
-                    ),
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        Text(
-                          currency.format((row['Amount'] ?? 0) as num),
-                          style: Theme.of(context).textTheme.bodyLarge!
-                              .copyWith(
-                                color: Theme.of(context).colorScheme.primary,
-                                fontWeight: FontWeight.w700,
-                              ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            (row['Note'] ?? '').toString(),
-                            style: Theme.of(context).textTheme.bodyMedium,
-                            overflow: TextOverflow.ellipsis,
-                            maxLines: 1,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      (row['Date'] ?? '').toString(),
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall!.copyWith(color: Colors.grey),
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child:
-                    (row['LocalReceiptPath'] != null &&
-                        (row['LocalReceiptPath'] as String).isNotEmpty)
-                    ? Image.file(
-                        File(row['LocalReceiptPath'] as String),
-                        width: 64,
-                        height: 64,
-                        fit: BoxFit.cover,
-                        errorBuilder: (c, e, s) => Container(
-                          width: 64,
-                          height: 64,
-                          color: Colors.grey[200],
-                          child: const Icon(Icons.broken_image, size: 28),
-                        ),
-                      )
-                    : (row['ReceiptUrl'] != null &&
-                          (row['ReceiptUrl'] as String).isNotEmpty)
-                    ? Image.network(
-                        row['ReceiptUrl'] as String,
-                        width: 64,
-                        height: 64,
-                        fit: BoxFit.cover,
-                        errorBuilder: (c, e, s) => Container(
-                          width: 64,
-                          height: 64,
-                          color: Colors.grey[200],
-                          child: const Icon(Icons.broken_image, size: 28),
-                        ),
-                      )
-                    : (row['Receipt'] != null
-                          ? Image.memory(
-                              row['Receipt'] as Uint8List,
-                              width: 64,
-                              height: 64,
-                              fit: BoxFit.cover,
-                              errorBuilder: (c, e, s) => Container(
-                                width: 64,
-                                height: 64,
-                                color: Colors.grey[200],
-                                child: const Icon(Icons.broken_image, size: 28),
-                              ),
-                            )
-                          : Container(
-                              width: 64,
-                              height: 64,
-                              color: Colors.grey[200],
-                              child: const Icon(Icons.receipt_long, size: 28),
-                            )),
               ),
-            ],
-          ),
+              child: Icon(
+                _savingsCategoryIcon(
+                  (row['Category'] ?? row['Name'] ?? '') as String?,
+                ),
+                size: 22,
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    [
+                      (row['Category'] ?? row['Name'] ?? 'No Category')
+                          .toString(),
+                      if (((row['Subcategory'] ?? '') as String)
+                          .toString()
+                          .trim()
+                          .isNotEmpty)
+                        (row['Subcategory']).toString(),
+                    ].join(' • '),
+                    style: Theme.of(context).textTheme.titleMedium!.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      Text(
+                        currency.format((row['Amount'] ?? 0) as num),
+                        style: Theme.of(context).textTheme.bodyLarge!.copyWith(
+                          color: Theme.of(context).colorScheme.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          (row['Note'] ?? '').toString(),
+                          style: Theme.of(context).textTheme.bodyMedium,
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    (row['Date'] ?? '').toString(),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall!.copyWith(color: Colors.grey),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            _savingsReceiptThumb(row),
+          ],
         ),
       ),
     );
   }
 }
 
-class _GoalSection extends StatelessWidget {
+class _SavingsSummaryHeader extends StatelessWidget {
+  final String periodLabel;
+  final String currentPeriodKey;
+  final ValueChanged<String> onChangePeriod;
+  final String netLabel;
   final String? goalLabel;
-  final double progress;
-  final double remainingRatio; // 0..1
+  final double progress; // 0..1
+  final double rawProgress; // unclamped progress, may exceed 1
+  final double goalPercent; // e.g., 60.0
   final VoidCallback? onSetGoal;
-  final Color color;
+  final String? depositsText;
 
-  const _GoalSection({
+  const _SavingsSummaryHeader({
+    required this.periodLabel,
+    required this.currentPeriodKey,
+    required this.onChangePeriod,
+    required this.netLabel,
     required this.goalLabel,
     required this.progress,
-    required this.remainingRatio,
+    required this.rawProgress,
+    required this.goalPercent,
     required this.onSetGoal,
-    required this.color,
+    this.depositsText,
   });
 
   @override
   Widget build(BuildContext context) {
-    final pct = (progress * 100).clamp(0, 100).toStringAsFixed(0);
-    return Container(
+    Color goalColor(double p) {
+      if (p >= 1.0) return Colors.green;
+      if (p >= 0.5) return Colors.amber;
+      return Colors.red;
+    }
+
+    return PressableNeumorphic(
+      borderRadius: 16,
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Theme.of(context).dividerColor.withValues(alpha: 0.2),
-        ),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Expanded(
-                child: Text(
-                  'Goal',
-                  style: TextStyle(fontWeight: FontWeight.w700),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    PopupMenuButton<String>(
+                      tooltip: 'Change period',
+                      onSelected: onChangePeriod,
+                      itemBuilder: (ctx) => const [
+                        PopupMenuItem(
+                          value: 'this_week',
+                          child: Text('This Week'),
+                        ),
+                        PopupMenuItem(
+                          value: 'this_month',
+                          child: Text('This Month'),
+                        ),
+                        PopupMenuItem(
+                          value: 'last_week',
+                          child: Text('Last Week'),
+                        ),
+                        PopupMenuItem(
+                          value: 'last_month',
+                          child: Text('Last Month'),
+                        ),
+                        PopupMenuItem(
+                          value: 'all_savings',
+                          child: Text('All Savings'),
+                        ),
+                      ],
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            periodLabel,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.keyboard_arrow_down, size: 18),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Builder(builder: (context) {
+                      // Derive sign from text parsing; if it contains '-' assume negative
+                      final isNegative = netLabel.contains('-');
+                      return Text(
+                        netLabel,
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                color: isNegative ? Colors.red : Colors.green),
+                      );
+                    }),
+                    if (depositsText != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        depositsText!,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ],
                 ),
               ),
               TextButton.icon(
                 onPressed: onSetGoal,
                 icon: const Icon(Icons.tune),
-                label: const Text('Set goal'),
+                label: const Text('Set Goal'),
               ),
             ],
           ),
-          const SizedBox(height: 8),
           if (goalLabel != null) ...[
+            const SizedBox(height: 12),
+            // Move goal text above the progress bar
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [Text('Goal: $goalLabel'), Text('$pct%')],
-            ),
-            const SizedBox(height: 8),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: LinearProgressIndicator(
-                value: progress,
-                minHeight: 10,
-                backgroundColor: Colors.grey.shade300,
-                valueColor: AlwaysStoppedAnimation<Color>(color),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _NetSavingsSection extends StatelessWidget {
-  final String netLabel;
-  final String totalLabel;
-  final String expensesLabel;
-  final double progress;
-  final Color color;
-  const _NetSavingsSection({
-    required this.netLabel,
-    required this.totalLabel,
-    required this.expensesLabel,
-    required this.progress,
-    required this.color,
-  });
-  @override
-  Widget build(BuildContext context) {
-    final hint = 'Total Savings = $totalLabel – $expensesLabel = $netLabel';
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Theme.of(context).dividerColor.withValues(alpha: 0.2),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Savings', style: TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: LinearProgressIndicator(
-              value: progress,
-              minHeight: 10,
-              backgroundColor: Colors.grey.shade300,
-              valueColor: AlwaysStoppedAnimation<Color>(color),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(hint, style: Theme.of(context).textTheme.bodySmall),
-          const SizedBox(height: 6),
-          Text(
-            'Total of all savings records: $totalLabel',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AggregationSection extends StatelessWidget {
-  final List<Map<String, dynamic>> rows;
-  final bool showAll;
-  final VoidCallback onToggle;
-  final NumberFormat currency;
-  const _AggregationSection({
-    required this.rows,
-    required this.showAll,
-    required this.onToggle,
-    required this.currency,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final bySub = <String, double>{};
-    for (final r in rows) {
-      final cat = (r['Category'] ?? 'Uncategorized').toString();
-      final sub = (r['Subcategory'] ?? 'Unspecified').toString();
-      final key = '$cat • $sub';
-      final amt = (r['Amount'] is num) ? (r['Amount'] as num).toDouble() : 0.0;
-      bySub[key] = (bySub[key] ?? 0) + amt;
-    }
-    final entries = bySub.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    final visible = showAll ? entries : entries.take(3).toList();
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
               children: [
-                Expanded(
-                  child: Text(
-                    'Savings by sub category',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Goal: ${goalLabel!}',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    Tooltip(
+                      message:
+                          '${goalPercent.toStringAsFixed(0)}% of $periodLabel Savings',
+                      child: IconButton(
+                        constraints: const BoxConstraints(minWidth: 32),
+                        padding: EdgeInsets.zero,
+                        icon: const Icon(Icons.help_outline, size: 18),
+                        onPressed: () {
+                          showDialog(
+                            context: context,
+                            builder: (_) => AlertDialog(
+                              title: const Text('Goal Calculation'),
+                              content: Text(
+                                '${goalPercent.toStringAsFixed(0)}% of $periodLabel Savings',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  child: const Text('OK'),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                 ),
-                TextButton(
-                  onPressed: onToggle,
-                  child: Text(showAll ? 'Show less' : 'Show more'),
-                ),
+                const SizedBox.shrink(),
               ],
             ),
             const SizedBox(height: 8),
-            if (visible.isEmpty)
-              const Text('No data yet')
-            else
-              Column(
-                children: [
-                  for (final e in visible)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6.0),
-                      child: Row(
-                        children: [
-                          Expanded(child: Text(e.key)),
-                          Text(
-                            currency.format(e.value),
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                        ],
-                      ),
+            GestureDetector(
+              onTap: () {
+                final rpct = (rawProgress * 100);
+                final remaining = 100 - rpct;
+                final msg = remaining >= 0
+                    ? '${remaining.clamp(0, 100).toStringAsFixed(0)}% remaining'
+                    : '${(-remaining).toStringAsFixed(0)}% over';
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(msg),
+                    duration: const Duration(seconds: 1),
+                  ),
+                );
+              },
+              child: Tooltip(
+                message: () {
+                  final rpct = (rawProgress * 100);
+                  final remaining = 100 - rpct;
+                  return remaining >= 0
+                      ? '${remaining.clamp(0, 100).toStringAsFixed(0)}% remaining'
+                      : '${(-remaining).toStringAsFixed(0)}% over';
+                }(),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 8,
+                    backgroundColor: Colors.grey.shade300,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      goalColor(progress),
                     ),
-                ],
+                  ),
+                ),
               ),
+            ),
           ],
-        ),
+        ],
       ),
     );
   }
 }
+
+// Small helper to render the savings receipt thumbnail safely.
+Widget _savingsReceiptThumb(Map<String, dynamic> row) {
+  final local = (row['LocalReceiptPath'] ?? '') as String;
+  final url = (row['ReceiptUrl'] ?? '') as String;
+  final hasMem = row['Receipt'] != null && row['Receipt'] is Uint8List;
+  Widget child;
+  if (local.isNotEmpty) {
+    child = Image.file(
+      File(local),
+      width: 64,
+      height: 64,
+      fit: BoxFit.cover,
+      errorBuilder: (c, e, s) => _brokenThumb(),
+    );
+  } else if (url.isNotEmpty) {
+    child = Image.network(
+      url,
+      width: 64,
+      height: 64,
+      fit: BoxFit.cover,
+      errorBuilder: (c, e, s) => _brokenThumb(),
+    );
+  } else if (hasMem) {
+    child = Image.memory(
+      row['Receipt'] as Uint8List,
+      width: 64,
+      height: 64,
+      fit: BoxFit.cover,
+      errorBuilder: (c, e, s) => _brokenThumb(),
+    );
+  } else {
+    child = _placeholderThumb();
+  }
+  return ClipRRect(borderRadius: BorderRadius.circular(12), child: child);
+}
+
+Widget _brokenThumb() => Container(
+  width: 64,
+  height: 64,
+  color: Colors.grey[200],
+  child: const Icon(Icons.broken_image, size: 28),
+);
+
+Widget _placeholderThumb() => Container(
+  width: 64,
+  height: 64,
+  color: Colors.grey[200],
+  child: const Icon(Icons.receipt_long, size: 28),
+);
+
+// Aggregation section removed
 
 class SavingsDetailsPage extends StatelessWidget {
   final Map<String, dynamic> saving;
@@ -723,128 +859,148 @@ class SavingsDetailsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Saving Details'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.edit, size: 32),
-            tooltip: 'Edit',
-            onPressed: () async {
-              final updatedSaving = await Navigator.push<Map<String, dynamic>>(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => SavingsEditPage(saving: saving),
-                ),
-              );
-              if (updatedSaving != null) {
-                onEdit(updatedSaving);
-              }
-            },
+    final currency = NumberFormat.currency(symbol: '₱', decimalDigits: 2);
+    return AppGradientBackground(
+      child: Scaffold(
+        extendBodyBehindAppBar: true,
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          flexibleSpace: ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: Container(color: Colors.transparent),
+            ),
           ),
-          IconButton(
-            icon: const Icon(Icons.delete, size: 32),
-            tooltip: 'Delete',
-            onPressed: () {
-              showDialog(
-                context: context,
-                builder: (_) => AlertDialog(
-                  title: const Text('Confirm Delete'),
-                  content: const Text(
-                    'Are you sure you want to delete this saving?',
+          title: const Text('Saving Details'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.edit, size: 32),
+              tooltip: 'Edit',
+              onPressed: () async {
+                final updatedSaving =
+                    await Navigator.push<Map<String, dynamic>>(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => SavingsEditPage(saving: saving),
+                      ),
+                    );
+                if (updatedSaving != null) {
+                  onEdit(updatedSaving);
+                }
+              },
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete, size: 32),
+              tooltip: 'Delete',
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (_) => AlertDialog(
+                    title: const Text('Confirm Delete'),
+                    content: const Text(
+                      'Are you sure you want to delete this saving?',
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Cancel'),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          onDelete();
+                          Navigator.pop(context);
+                        },
+                        child: const Text(
+                          'Delete',
+                          style: TextStyle(color: Colors.red),
+                        ),
+                      ),
+                    ],
                   ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Cancel'),
-                    ),
-                    TextButton(
-                      onPressed: () {
-                        onDelete();
-                        Navigator.pop(context);
-                      },
-                      child: const Text(
-                        'Delete',
-                        style: TextStyle(color: Colors.red),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Saving Details',
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 24),
-            _buildDetailRow(
-              'Category',
-              [
-                (saving['Category'] ?? '').toString(),
-                if (((saving['Subcategory'] ?? '') as String)
-                    .toString()
-                    .trim()
-                    .isNotEmpty)
-                  (saving['Subcategory']).toString(),
-              ].where((e) => e.isNotEmpty).join(' • '),
-            ),
-            _buildDetailRow(
-              'Amount',
-              '₱${(saving['Amount'] ?? 0.0).toStringAsFixed(2)}',
-            ),
-            _buildDetailRow('Date', saving['Date'] ?? ''),
-            _buildDetailRow('Note', saving['Note'] ?? ''),
-            const SizedBox(height: 32),
-            Center(
-              child: Builder(
-                builder: (context) {
-                  final localPath =
-                      (saving['LocalReceiptPath'] ?? '') as String;
-                  final url = (saving['ReceiptUrl'] ?? '') as String;
-                  if (localPath.isNotEmpty) {
-                    return ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.file(
-                        File(localPath),
-                        width: MediaQuery.of(context).size.width * 0.9,
-                        height: MediaQuery.of(context).size.height * 0.5,
-                        fit: BoxFit.contain,
-                      ),
-                    );
-                  } else if (url.isNotEmpty) {
-                    return ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.network(
-                        url,
-                        width: MediaQuery.of(context).size.width * 0.9,
-                        height: MediaQuery.of(context).size.height * 0.5,
-                        fit: BoxFit.contain,
-                      ),
-                    );
-                  } else if (saving['Receipt'] != null) {
-                    return ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.memory(
-                        saving['Receipt'],
-                        width: MediaQuery.of(context).size.width * 0.9,
-                        height: MediaQuery.of(context).size.height * 0.5,
-                        fit: BoxFit.contain,
-                      ),
-                    );
-                  }
-                  return const SizedBox.shrink();
-                },
-              ),
+                );
+              },
             ),
           ],
+        ),
+        body: SingleChildScrollView(
+          padding: EdgeInsets.only(
+            top: MediaQuery.of(context).padding.top + kToolbarHeight + 12,
+            left: 24,
+            right: 24,
+            bottom: 24,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Saving Details',
+                style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 24),
+              _buildDetailRow(
+                'Category',
+                [
+                  (saving['Category'] ?? '').toString(),
+                  if (((saving['Subcategory'] ?? '') as String)
+                      .toString()
+                      .trim()
+                      .isNotEmpty)
+                    (saving['Subcategory']).toString(),
+                ].where((e) => e.isNotEmpty).join(' • '),
+              ),
+              _buildDetailRow(
+                'Amount',
+                currency.format((saving['Amount'] ?? 0) as num),
+              ),
+              _buildDetailRow('Date', saving['Date'] ?? ''),
+              _buildDetailRow('Note', saving['Note'] ?? ''),
+              const SizedBox(height: 32),
+              Center(
+                child: Builder(
+                  builder: (context) {
+                    final localPath =
+                        (saving['LocalReceiptPath'] ?? '') as String;
+                    final url = (saving['ReceiptUrl'] ?? '') as String;
+                    if (localPath.isNotEmpty) {
+                      return ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.file(
+                          File(localPath),
+                          width: MediaQuery.of(context).size.width * 0.9,
+                          height: MediaQuery.of(context).size.height * 0.5,
+                          fit: BoxFit.contain,
+                        ),
+                      );
+                    } else if (url.isNotEmpty) {
+                      return ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.network(
+                          url,
+                          width: MediaQuery.of(context).size.width * 0.9,
+                          height: MediaQuery.of(context).size.height * 0.5,
+                          fit: BoxFit.contain,
+                        ),
+                      );
+                    } else if (saving['Receipt'] != null) {
+                      return ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.memory(
+                          saving['Receipt'],
+                          width: MediaQuery.of(context).size.width * 0.9,
+                          height: MediaQuery.of(context).size.height * 0.5,
+                          fit: BoxFit.contain,
+                        ),
+                      );
+                    }
+                    return const SizedBox.shrink();
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -888,6 +1044,8 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
   late TextEditingController dateController;
   late TextEditingController noteController;
   Uint8List? receipt;
+  String? localPath;
+  String? receiptUrl;
 
   String? selectedCategory;
   String? selectedSubcategory;
@@ -965,7 +1123,11 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
     amountController = TextEditingController(text: amtText);
     dateController = TextEditingController(text: widget.saving['Date'] ?? '');
     noteController = TextEditingController(text: widget.saving['Note'] ?? '');
-    receipt = widget.saving['Receipt'];
+  receipt = widget.saving['Receipt'];
+  final lp = (widget.saving['LocalReceiptPath'] ?? '') as String;
+  localPath = lp.isNotEmpty ? lp : null;
+  final ru = (widget.saving['ReceiptUrl'] ?? '') as String;
+  receiptUrl = ru.isNotEmpty ? ru : null;
     if (!categoriesMap.containsKey(selectedCategory)) {
       selectedCategory = null;
       selectedSubcategory = null;
@@ -973,7 +1135,7 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
     if (dateController.text.trim().isEmpty) {
       final now = DateTime.now();
       dateController.text =
-          "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+          "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
     }
   }
 
@@ -986,29 +1148,111 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
   }
 
   Future<void> _pickDate() async {
+    final current = DateTime.tryParse(dateController.text) ?? DateTime.now();
     final picked = await showDatePicker(
       context: context,
-      initialDate: DateTime.tryParse(dateController.text) ?? DateTime.now(),
+      initialDate: current,
       firstDate: DateTime(2000),
       lastDate: DateTime(2100),
     );
     if (picked != null) {
       setState(() {
+        final dt = DateTime(
+          picked.year,
+          picked.month,
+          picked.day,
+          current.hour,
+          current.minute,
+        );
         dateController.text =
-            "${picked.year}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}";
+            "${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
       });
     }
   }
 
-  Future<void> _pickImage(ImageSource source) async {
-    final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: source);
-    if (pickedFile != null) {
-      final bytes = await pickedFile.readAsBytes();
+  Future<void> _pickTime() async {
+    final current = DateTime.tryParse(dateController.text) ?? DateTime.now();
+    final t = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(current),
+      builder: (ctx, child) => MediaQuery(
+        data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: false),
+        child: child!,
+      ),
+    );
+    if (t != null) {
       setState(() {
-        receipt = bytes;
+        final dt = DateTime(
+          current.year,
+          current.month,
+          current.day,
+          t.hour,
+          t.minute,
+        );
+        dateController.text =
+            "${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
       });
     }
+  }
+
+  Future<void> _pickDateAndTime() async {
+    final current = DateTime.tryParse(dateController.text) ?? DateTime.now();
+    final pickedDate = await showDatePicker(
+      context: context,
+      initialDate: current,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (pickedDate == null) return;
+    final pickedTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(current),
+      builder: (ctx, child) => MediaQuery(
+        data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: false),
+        child: child!,
+      ),
+    );
+    final dt = DateTime(
+      pickedDate.year,
+      pickedDate.month,
+      pickedDate.day,
+      pickedTime?.hour ?? current.hour,
+      pickedTime?.minute ?? current.minute,
+    );
+    setState(() {
+      dateController.text =
+          "${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
+    });
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(source: source, imageQuality: 85);
+    if (pickedFile == null) return;
+    final raw = await pickedFile.readAsBytes();
+    Uint8List bytes = raw;
+    try {
+      final decoded = img.decodeImage(raw);
+      if (decoded != null) {
+        final normalized = img.bakeOrientation(decoded);
+        const maxDim = 1600;
+        final w = normalized.width, h = normalized.height;
+        img.Image finalImg = normalized;
+        if (w > maxDim || h > maxDim) {
+          final scale = w >= h ? maxDim / w : maxDim / h;
+          final newW = (w * scale).round();
+          final newH = (h * scale).round();
+          finalImg = img.copyResize(normalized, width: newW, height: newH);
+        }
+        bytes = Uint8List.fromList(img.encodeJpg(finalImg, quality: 85));
+      }
+    } catch (_) {}
+    setState(() {
+      receipt = bytes;
+      // Clear other references when a new image is attached
+      localPath = null;
+      receiptUrl = null;
+    });
   }
 
   Future<void> _showImageSourceSheet() async {
@@ -1136,221 +1380,314 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
         ? categoriesMap[selectedCategory]!
         : [];
 
-    return Scaffold(
-      resizeToAvoidBottomInset: true,
-      appBar: AppBar(
-        title: Text(
-          widget.saving['Category'] == '' ? 'Add Saving' : 'Edit Saving',
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.save),
-            tooltip: 'Save',
-            onPressed: _handleSaveTap,
+    return AppGradientBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        extendBodyBehindAppBar: true,
+        resizeToAvoidBottomInset: true,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          surfaceTintColor: Colors.transparent,
+          flexibleSpace: ClipRect(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+              child: Container(
+                color: Theme.of(
+                  context,
+                ).colorScheme.surface.withValues(alpha: 0.06),
+              ),
+            ),
           ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.fromLTRB(
-          24,
-          24,
-          24,
-          24 + MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    isExpanded: true,
-                    value: selectedCategory,
-                    decoration: const InputDecoration(
-                      labelText: 'Category',
-                      prefixIcon: Icon(Icons.category_outlined),
-                      border: OutlineInputBorder(),
-                    ),
-                    items: categoriesMap.keys
-                        .map<DropdownMenuItem<String>>(
-                          (cat) =>
-                              DropdownMenuItem(value: cat, child: Text(cat)),
-                        )
-                        .toList(),
-                    onChanged: (val) {
-                      setState(() {
-                        selectedCategory = val;
-                        selectedSubcategory = null;
-                      });
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                IconButton.filledTonal(
-                  tooltip: 'Add category',
-                  onPressed: _addNewCategory,
-                  icon: const Icon(Icons.add),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            if (selectedCategory != null) ...[
-              Row(
-                children: [
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      isExpanded: true,
-                      value: subcategories.contains(selectedSubcategory)
-                          ? selectedSubcategory
-                          : null,
-                      decoration: const InputDecoration(
-                        labelText: 'Subcategory',
-                        isDense: true,
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 12,
-                        ),
-                        border: OutlineInputBorder(),
-                      ),
-                      items: subcategories
-                          .map<DropdownMenuItem<String>>(
-                            (sub) =>
-                                DropdownMenuItem(value: sub, child: Text(sub)),
-                          )
-                          .toList(),
-                      onChanged: (val) {
-                        setState(() {
-                          selectedSubcategory = val;
-                        });
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  IconButton.filledTonal(
-                    tooltip: 'Add subcategory',
-                    onPressed: _addNewSubcategory,
-                    icon: const Icon(Icons.add),
-                  ),
-                ],
-              ),
-              if (selectedSubcategory == null ||
-                  (selectedSubcategory?.trim().isEmpty ?? true))
-                const Padding(
-                  padding: EdgeInsets.only(top: 8.0),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Subcategory is required',
-                      style: TextStyle(color: Colors.red),
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 20),
-            ],
-            TextField(
-              controller: amountController,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              inputFormatters: [CurrencyInputFormatter()],
-              onChanged: (_) => setState(() {}),
-              style: const TextStyle(fontSize: 20),
-              decoration: const InputDecoration(
-                labelText: 'Amount',
-                prefixText: '₱ ',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            if ((double.tryParse(amountController.text.replaceAll(',', '')) ??
-                    0.0) <=
-                0.0)
-              const Padding(
-                padding: EdgeInsets.only(top: 8.0),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'Amount must be greater than 0',
-                    style: TextStyle(color: Colors.red),
-                  ),
-                ),
-              ),
-            const SizedBox(height: 20),
-            TextField(
-              controller: dateController,
-              readOnly: true,
-              onTap: _pickDate,
-              style: const TextStyle(fontSize: 20),
-              decoration: InputDecoration(
-                labelText: 'Date',
-                prefixIcon: const Icon(Icons.event_outlined),
-                border: const OutlineInputBorder(),
-                suffixIcon: IconButton(
-                  tooltip: 'Pick date',
-                  icon: const Icon(Icons.calendar_today_outlined),
-                  onPressed: _pickDate,
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            TextField(
-              controller: noteController,
-              style: const TextStyle(fontSize: 20),
-              decoration: const InputDecoration(
-                labelText: 'Note',
-                prefixIcon: Icon(Icons.notes_outlined),
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 24),
-            if (receipt != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.memory(
-                  receipt!,
-                  width: MediaQuery.of(context).size.width * 0.9,
-                  height: MediaQuery.of(context).size.height * 0.4,
-                  fit: BoxFit.cover,
-                  errorBuilder: (c, e, s) => Container(
-                    width: MediaQuery.of(context).size.width * 0.9,
-                    height: MediaQuery.of(context).size.height * 0.4,
-                    color: Colors.grey[200],
-                    child: const Icon(Icons.broken_image, size: 48),
-                  ),
-                ),
-              ),
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              children: [
-                ElevatedButton.icon(
-                  onPressed: _showImageSourceSheet,
-                  icon: const Icon(Icons.attachment_outlined),
-                  label: Text(
-                    receipt == null ? 'Attach Image' : 'Change Image',
-                  ),
-                ),
-                if (receipt != null)
-                  OutlinedButton.icon(
-                    onPressed: () => setState(() => receipt = null),
-                    icon: const Icon(Icons.delete_outline),
-                    label: const Text('Remove'),
-                  ),
-              ],
+          title: Text(
+            widget.saving['Category'] == '' ? 'Add Saving' : 'Edit Saving',
+          ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.save),
+              tooltip: 'Save',
+              onPressed: _handleSaveTap,
             ),
           ],
         ),
-      ),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.all(16),
-        child: ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            minimumSize: const Size.fromHeight(56),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
+        body: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(
+            24,
+            MediaQuery.of(context).padding.top + kToolbarHeight + 16,
+            24,
+            24 + MediaQuery.of(context).viewInsets.bottom,
+          ),
+          child: PressableNeumorphic(
+            borderRadius: 16,
+            padding: const EdgeInsets.all(16),
+            useSurfaceBase: true,
+            // Form panels look cleaner on plain surface
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        isExpanded: true,
+                        value: selectedCategory,
+                        decoration: const InputDecoration(
+                          labelText: 'Category',
+                          prefixIcon: Icon(Icons.category_outlined),
+                          border: OutlineInputBorder(),
+                        ),
+                        items: categoriesMap.keys
+                            .map<DropdownMenuItem<String>>(
+                              (cat) => DropdownMenuItem(
+                                value: cat,
+                                child: Text(cat),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (val) {
+                          setState(() {
+                            selectedCategory = val;
+                            selectedSubcategory = null;
+                          });
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filledTonal(
+                      tooltip: 'Add category',
+                      onPressed: _addNewCategory,
+                      icon: const Icon(Icons.add),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+                if (selectedCategory != null) ...[
+                  Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          isExpanded: true,
+                          value: subcategories.contains(selectedSubcategory)
+                              ? selectedSubcategory
+                              : null,
+                          decoration: const InputDecoration(
+                            labelText: 'Subcategory',
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 12,
+                            ),
+                            border: OutlineInputBorder(),
+                          ),
+                          items: subcategories
+                              .map<DropdownMenuItem<String>>(
+                                (sub) => DropdownMenuItem(
+                                  value: sub,
+                                  child: Text(sub),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (val) {
+                            setState(() {
+                              selectedSubcategory = val;
+                            });
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      IconButton.filledTonal(
+                        tooltip: 'Add subcategory',
+                        onPressed: _addNewSubcategory,
+                        icon: const Icon(Icons.add),
+                      ),
+                    ],
+                  ),
+                  if (selectedSubcategory == null ||
+                      (selectedSubcategory?.trim().isEmpty ?? true))
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8.0),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'Subcategory is required',
+                          style: TextStyle(color: Colors.red),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 20),
+                ],
+                TextField(
+                  controller: amountController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  inputFormatters: [CurrencyInputFormatter()],
+                  onChanged: (_) => setState(() {}),
+                  style: const TextStyle(fontSize: 20),
+                  decoration: const InputDecoration(
+                    labelText: 'Amount',
+                    prefixText: '₱ ',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                if ((double.tryParse(
+                          amountController.text.replaceAll(',', ''),
+                        ) ??
+                        0.0) <=
+                    0.0)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8.0),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Amount must be greater than 0',
+                        style: TextStyle(color: Colors.red),
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 20),
+                TextField(
+                  controller: dateController,
+                  readOnly: true,
+                  onTap: _pickDateAndTime,
+                  style: const TextStyle(fontSize: 20),
+                  decoration: InputDecoration(
+                    labelText: 'Date & time',
+                    prefixIcon: const Icon(Icons.event_outlined),
+                    border: const OutlineInputBorder(),
+                    suffixIconConstraints: const BoxConstraints(minWidth: 96),
+                    suffixIcon: SizedBox(
+                      width: 96,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            tooltip: 'Pick date',
+                            icon: const Icon(Icons.calendar_today_outlined),
+                            onPressed: _pickDate,
+                          ),
+                          IconButton(
+                            tooltip: 'Pick time',
+                            icon: const Icon(Icons.access_time),
+                            onPressed: _pickTime,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Builder(
+                  builder: (_) {
+                    final dt = DateTime.tryParse(dateController.text);
+                    final friendly = dt != null
+                        ? DateFormat('MMM d, y h:mm a').format(dt)
+                        : dateController.text;
+                    return Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        friendly,
+                        style: const TextStyle(color: Colors.grey),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 20),
+                TextField(
+                  controller: noteController,
+                  style: const TextStyle(fontSize: 20),
+                  decoration: const InputDecoration(
+                    labelText: 'Note',
+                    prefixIcon: Icon(Icons.notes_outlined),
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Builder(
+                  builder: (ctx) {
+                    Widget? imgWidget;
+                    if (receipt != null) {
+                      imgWidget = Image.memory(
+                        receipt!,
+                        width: MediaQuery.of(context).size.width * 0.9,
+                        height: MediaQuery.of(context).size.height * 0.4,
+                        fit: BoxFit.cover,
+                        errorBuilder: (c, e, s) => Container(
+                          width: MediaQuery.of(context).size.width * 0.9,
+                          height: MediaQuery.of(context).size.height * 0.4,
+                          color: Colors.grey[200],
+                          child: const Icon(Icons.broken_image, size: 48),
+                        ),
+                      );
+                    } else if ((localPath ?? '').isNotEmpty) {
+                      imgWidget = Image.file(
+                        File(localPath!),
+                        width: MediaQuery.of(context).size.width * 0.9,
+                        height: MediaQuery.of(context).size.height * 0.4,
+                        fit: BoxFit.cover,
+                      );
+                    } else if ((receiptUrl ?? '').isNotEmpty) {
+                      imgWidget = Image.network(
+                        receiptUrl!,
+                        width: MediaQuery.of(context).size.width * 0.9,
+                        height: MediaQuery.of(context).size.height * 0.4,
+                        fit: BoxFit.cover,
+                      );
+                    }
+                    if (imgWidget == null) return const SizedBox.shrink();
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: imgWidget,
+                    );
+                  },
+                ),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 8,
+                  children: [
+                    ElevatedButton.icon(
+                      onPressed: _showImageSourceSheet,
+                      icon: const Icon(Icons.attachment_outlined),
+                      label: Text(
+                        (receipt == null && (localPath ?? '').isEmpty && (receiptUrl ?? '').isEmpty)
+                            ? 'Attach Image'
+                            : 'Change Image',
+                      ),
+                    ),
+                    if (receipt != null || (localPath ?? '').isNotEmpty || (receiptUrl ?? '').isNotEmpty)
+                      OutlinedButton.icon(
+                        onPressed: () => setState(() {
+                          receipt = null;
+                          localPath = null;
+                          receiptUrl = null;
+                        }),
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('Remove'),
+                      ),
+                  ],
+                ),
+              ],
             ),
           ),
-          onPressed: _handleSaveTap,
-          icon: const Icon(Icons.save),
-          label: const Text("Save Saving"),
+        ),
+        bottomNavigationBar: Padding(
+          padding: const EdgeInsets.all(16),
+          child: PressableNeumorphic(
+            borderRadius: 16,
+            useSurfaceBase: true,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size.fromHeight(56),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+              onPressed: _handleSaveTap,
+              icon: const Icon(Icons.save),
+              label: const Text("Save Saving"),
+            ),
+          ),
         ),
       ),
     );
@@ -1381,6 +1718,12 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
       'Date': dateController.text,
       'Note': noteController.text,
       'Receipt': receipt,
+      if (receipt != null) 'LocalReceiptPath': null,
+      if (receipt != null) 'ReceiptUrl': '',
+      if (receipt == null && (localPath ?? '').isEmpty && (receiptUrl ?? '').isEmpty) ...{
+        'LocalReceiptPath': null,
+        'ReceiptUrl': '',
+      },
       'id': widget.saving['id'],
     };
     Navigator.pop(context, updatedSaving);
@@ -1418,9 +1761,7 @@ class CurrencyInputFormatter extends TextInputFormatter {
       final parts = sanitized.split('.');
       final decimals = parts[1];
       sanitized =
-          parts[0] +
-          '.' +
-          (decimals.length > 2 ? decimals.substring(0, 2) : decimals);
+          '${parts[0]}.${decimals.length > 2 ? decimals.substring(0, 2) : decimals}';
     }
 
     String intPart = sanitized;

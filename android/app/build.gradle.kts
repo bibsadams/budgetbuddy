@@ -1,6 +1,6 @@
 plugins {
     id("com.android.application")
-    id("kotlin-android")
+    id("org.jetbrains.kotlin.android")
     id("com.google.gms.google-services") // ✅ Required for Firebase
     id("dev.flutter.flutter-gradle-plugin") // ✅ Must be last for Flutter compatibility
 }

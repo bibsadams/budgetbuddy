@@ -1,0 +1,74 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(account) {
+      return isSignedIn() && account.data.createdBy == request.auth.uid;
+    }
+
+    function isMember(account) {
+      return isSignedIn() && (account.data.members != null && request.auth.uid in account.data.members);
+    }
+
+  // Self-join is no longer allowed; owner must approve and a backend adds the user to members.
+
+    // Accounts root
+    match /accounts/{accountId} {
+      // Allow existence checks by any signed-in user (needed to start join request), but prevent listing at collection root
+      allow get: if isSignedIn();
+
+      // Owner and members can read their account's data
+      allow read: if isOwner(resource) || isMember(resource);
+
+      // Owner can update (toggle isJoint, manage members, etc.)
+      allow update, delete: if isOwner(resource);
+
+      // Creation is allowed by signed-in users (owner creating their personal or new shared account)
+      allow create: if isSignedIn();
+
+      // Subcollections
+  match /members/{uid} {
+        // Read allowed to owner and members; user can read their own member doc
+        allow read: if isOwner(get(/databases/$(database)/documents/accounts/$(accountId)))
+                    || isMember(get(/databases/$(database)/documents/accounts/$(accountId)))
+                    || (isSignedIn() && uid == request.auth.uid);
+        // A user can upsert their own member profile doc
+        allow create, update: if isSignedIn() && uid == request.auth.uid;
+      }
+
+  match /joinRequests/{uid} {
+        // Users can create/read their own join requests
+        allow create: if isSignedIn() && uid == request.auth.uid;
+        allow get: if isSignedIn() && uid == request.auth.uid;
+        // Owner can list and update (approve/deny) any request
+        allow list: if isOwner(get(/databases/$(database)/documents/accounts/$(accountId)));
+        allow update, delete: if isOwner(get(/databases/$(database)/documents/accounts/$(accountId)));
+      }
+
+      // Data collections under account (expenses, savings, meta)
+      match /{collName}/{docId} {
+        allow read: if isOwner(get(/databases/$(database)/documents/accounts/$(accountId)))
+                    || isMember(get(/databases/$(database)/documents/accounts/$(accountId)));
+        allow create, update, delete: if isOwner(get(/databases/$(database)/documents/accounts/$(accountId)))
+                    || isMember(get(/databases/$(database)/documents/accounts/$(accountId)));
+      }
+    }
+
+    // Global joinRequests fallback (clients may write here if subcollection is blocked)
+    match /joinRequests/{docId} {
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow read, update, delete: if false;
+    }
+
+    // Allow Cloud Function/Extension to write to /mail for email sending.
+    // In production, tighten with App Check or service account.
+  match /mail/{document=**} {
+      allow create: if isSignedIn();
+      allow read, update, delete: if false;
+    }
+  }
+}

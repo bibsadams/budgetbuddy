@@ -1,15 +1,26 @@
-import 'dart:typed_data';
+import 'dart:ui';
+import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'services/auth_service.dart';
 
 import 'services/shared_account_repository.dart';
 import 'services/local_receipt_service.dart';
+import 'services/receipt_backup_service.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'features/home/home_tab.dart';
 import 'features/expenses/expenses_tab.dart';
 import 'features/savings/savings_tab.dart';
 import 'features/bills/bills_tab.dart';
 import 'features/report/report_tab.dart';
+import 'manage_accounts_page.dart';
+import 'join_requests_page.dart';
+import 'widgets/app_gradient_background.dart';
 
 class MainTabsPage extends StatefulWidget {
   final String accountId;
@@ -24,6 +35,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
   // Data/state
   late final Box box;
   SharedAccountRepository? _repo;
+  String? _cloudWarning; // persistent banner for cloud permission issues
 
   // Streams
   Stream<List<Map<String, dynamic>>>? _expenses$;
@@ -43,13 +55,44 @@ class _MainTabsPageState extends State<MainTabsPage> {
 
   // UI
   int _index = 0;
+  late final PageController _pageController;
+  // Scroll controllers per tab for tap-to-top (Home, Expenses, Savings, Bills, Report, Settings)
+  final _homeScroll = ScrollController();
+  final _expensesScroll = ScrollController();
+  final _savingsScroll = ScrollController();
+  final _billsScroll = ScrollController();
+  final _reportScroll = ScrollController();
+  final _settingsScroll = ScrollController();
   Map<String, dynamic>? _accountDoc;
+  // Multi-account
+  List<String> _linkedAccounts = const [];
+  Map<String, String> _accountAliases = const {};
+  // Debounced autosave on global taps
+  Timer? _tapAutosave;
+  void _scheduleTapAutosave() {
+    _tapAutosave?.cancel();
+    _tapAutosave = Timer(const Duration(milliseconds: 500), () {
+      if (!mounted) return;
+      _saveLocalOnly();
+    });
+  }
 
   @override
   void initState() {
     super.initState();
     box = Hive.box('budgetBox');
     _initShared();
+  _pageController = PageController(initialPage: _index);
+  }
+
+  // Generate a stable-ish uid for a receipt (no external dependency; 26-28 chars)
+  String _genReceiptUid() {
+    final now = DateTime.now().toUtc();
+    final ts = now.microsecondsSinceEpoch.toRadixString(36);
+    final rand = (now.hashCode ^ identityHashCode(this) ^ ts.hashCode)
+        .toUnsigned(31)
+        .toRadixString(36);
+    return 'r_${ts}_$rand';
   }
 
   // Stable hash for matching the same record across provisional (local_) and remote ids
@@ -108,12 +151,12 @@ class _MainTabsPageState extends State<MainTabsPage> {
           accountId: widget.accountId,
           collection: collection,
           docId: id,
+          receiptUid: (currentById[id]?['ReceiptUid'] ?? '').toString(),
         );
       }
     }
 
     // Save/assign IDs and persist attachments for desired rows
-
     for (int i = 0; i < desired.length; i++) {
       final item = Map<String, dynamic>.from(desired[i]);
       String id = (item['id'] as String?) ?? '';
@@ -127,11 +170,19 @@ class _MainTabsPageState extends State<MainTabsPage> {
       }
 
       if (hasBytes) {
+        String receiptUid =
+            (item['ReceiptUid'] ?? item['receiptUid'] ?? '').toString();
+        if (receiptUid.isEmpty) {
+          receiptUid = _genReceiptUid();
+          item['ReceiptUid'] = receiptUid;
+          desired[i] = item;
+        }
         final path = await LocalReceiptService().saveReceipt(
           accountId: widget.accountId,
           collection: collection,
           docId: id,
           bytes: item['Receipt'] as Uint8List,
+          receiptUid: receiptUid,
         );
         if (collection == 'expenses') {
           _localReceiptPathsExpenses[id] = path;
@@ -236,8 +287,9 @@ class _MainTabsPageState extends State<MainTabsPage> {
     for (int i = 0; i < expList.length; i++) {
       final id = (expList[i]['id'] ?? '').toString();
       final p = _localReceiptPathsExpenses[id];
-      if (p != null && p.isNotEmpty)
+      if (p != null && p.isNotEmpty) {
         expList[i] = {...expList[i], 'LocalReceiptPath': p};
+      }
     }
     tableData['Expenses'] = expList;
 
@@ -245,8 +297,9 @@ class _MainTabsPageState extends State<MainTabsPage> {
     for (int i = 0; i < savList.length; i++) {
       final id = (savList[i]['id'] ?? '').toString();
       final p = _localReceiptPathsSavings[id];
-      if (p != null && p.isNotEmpty)
+      if (p != null && p.isNotEmpty) {
         savList[i] = {...savList[i], 'LocalReceiptPath': p};
+      }
     }
     tableData['Savings'] = savList;
 
@@ -284,6 +337,17 @@ class _MainTabsPageState extends State<MainTabsPage> {
 
   void _initShared() {
     _loadLocalOnly();
+    // Load linked accounts list from Hive for account switcher
+    final la = box.get('linkedAccounts');
+    if (la is List) {
+      _linkedAccounts = la.whereType<String>().toList();
+    }
+    final aliases = box.get('accountAliases');
+    if (aliases is Map) {
+      _accountAliases = aliases.map(
+        (k, v) => MapEntry(k.toString(), v.toString()),
+      );
+    }
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return; // guarded by login flow
     _repo = SharedAccountRepository(accountId: widget.accountId, uid: user.uid);
@@ -295,8 +359,9 @@ class _MainTabsPageState extends State<MainTabsPage> {
 
     // Listen and integrate into tableData in-memory
     _expenses$!.listen((remoteRows) {
-      if (remoteRows.isEmpty)
+      if (remoteRows.isEmpty) {
         return; // keep offline data if backend emits nothing
+      }
       final local = List<Map<String, dynamic>>.from(
         tableData['Expenses'] ?? [],
       );
@@ -394,8 +459,9 @@ class _MainTabsPageState extends State<MainTabsPage> {
       _saveLocalOnly();
     });
     _savings$!.listen((remoteRows) {
-      if (remoteRows.isEmpty)
+      if (remoteRows.isEmpty) {
         return; // keep offline data if backend emits nothing
+      }
       final local = List<Map<String, dynamic>>.from(tableData['Savings'] ?? []);
       final remoteById = {
         for (final r in remoteRows.where((e) => e['id'] != null))
@@ -484,9 +550,31 @@ class _MainTabsPageState extends State<MainTabsPage> {
       _saveLocalOnly();
     });
     _meta$!.listen((meta) {
+      // Overlay amount-based legacy values
+      final limits = (meta['limits'] as Map?) ?? {};
+      final goals = (meta['goals'] as Map?) ?? {};
+      // New: percent-based maps from meta
+      final expPct = (meta['expensesLimitPercent'] as Map?) ?? {};
+      final savPct = (meta['savingsGoalPercent'] as Map?) ?? {};
+
+      // Write percent maps into Hive so tabs immediately read them
+      void putNum(String key, Object? v) {
+        if (v is num) box.put(key, v.toDouble());
+      }
+      // Expenses percents
+      putNum('expensesLimitPercent_this_week', expPct['this_week']);
+      putNum('expensesLimitPercent_this_month', expPct['this_month']);
+      putNum('expensesLimitPercent_last_week', expPct['last_week']);
+      putNum('expensesLimitPercent_last_month', expPct['last_month']);
+      putNum('expensesLimitPercent_all_expenses', expPct['all_expenses']);
+      // Savings percents
+      putNum('savingsGoalPercent_this_week', savPct['this_week']);
+      putNum('savingsGoalPercent_this_month', savPct['this_month']);
+      putNum('savingsGoalPercent_last_week', savPct['last_week']);
+      putNum('savingsGoalPercent_last_month', savPct['last_month']);
+      putNum('savingsGoalPercent_all_savings', savPct['all_savings']);
+
       setState(() {
-        final limits = (meta['limits'] as Map?) ?? {};
-        final goals = (meta['goals'] as Map?) ?? {};
         tabLimits['Expenses'] =
             (limits['Expenses'] as num?)?.toDouble() ??
             (tabLimits['Expenses'] ?? 0.0);
@@ -507,7 +595,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
     );
     if (index < 0 || index >= list.length) return null;
     final item = Map<String, dynamic>.from(list[index]);
-    final hasBytes = item['Receipt'] != null && item['Receipt'] is Uint8List;
+  final hasBytes = item['Receipt'] != null && item['Receipt'] is Uint8List;
     if (!hasBytes) return null;
 
     // Assign a local id if absent
@@ -517,11 +605,19 @@ class _MainTabsPageState extends State<MainTabsPage> {
     }
 
     try {
+      // Ensure a stable receipt uid exists on first attach
+      String receiptUid = (item['ReceiptUid'] ?? item['receiptUid'] ?? '')
+          .toString();
+      if (receiptUid.isEmpty) {
+        receiptUid = _genReceiptUid();
+        item['ReceiptUid'] = receiptUid;
+      }
       final path = await LocalReceiptService().saveReceipt(
         accountId: widget.accountId,
         collection: collection,
         docId: id,
         bytes: item['Receipt'] as Uint8List,
+        receiptUid: receiptUid,
       );
 
       // Update maps and row in-place for immediate UI
@@ -535,6 +631,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
         ...item,
         'id': id,
         'LocalReceiptPath': path,
+        'ReceiptUid': receiptUid,
         'clientHash': ch,
       };
       setState(() {
@@ -581,16 +678,24 @@ class _MainTabsPageState extends State<MainTabsPage> {
         id = 'local_${DateTime.now().millisecondsSinceEpoch}';
         item['id'] = id;
       }
+      String receiptUid = (item['ReceiptUid'] ?? item['receiptUid'] ?? '')
+          .toString();
+      if (receiptUid.isEmpty) {
+        receiptUid = _genReceiptUid();
+        item['ReceiptUid'] = receiptUid;
+      }
       try {
         final path = await LocalReceiptService().saveReceipt(
           accountId: widget.accountId,
           collection: collection,
           docId: id,
           bytes: item['Receipt'] as Uint8List,
+          receiptUid: receiptUid,
         );
         item['LocalReceiptPath'] = path;
         item['clientHash'] =
             (item['clientHash'] as String?) ?? _clientHash(item);
+        item['ReceiptUid'] = receiptUid;
         if (collection == 'expenses') {
           _localReceiptPathsExpenses[id] = path;
         } else {
@@ -621,44 +726,19 @@ class _MainTabsPageState extends State<MainTabsPage> {
   @override
   Widget build(BuildContext context) {
     final pages = <Widget>[
-      Column(
-        children: [
-          if ((widget.initialWarning ?? '').isNotEmpty)
-            Material(
-              color: Colors.amber.shade100,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.warning_amber_rounded, size: 18),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        widget.initialWarning!,
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          Expanded(
-            child: HomeTab(
-              tableData: tableData,
-              tabLimits: tabLimits,
-              savingsGoals: savingsGoals,
-            ),
-          ),
-        ],
+      PrimaryScrollController(
+        controller: _homeScroll,
+        child: HomeTab(
+        tableData: tableData,
+        tabLimits: tabLimits,
+        savingsGoals: savingsGoals,
+        ),
       ),
-      _buildExpensesPage(),
-      _buildSavingsPage(),
-      _buildBillsPage(),
-      _buildReportPage(),
-      const _SettingsPlaceholder(),
+      PrimaryScrollController(controller: _expensesScroll, child: _buildExpensesPage()),
+      PrimaryScrollController(controller: _savingsScroll, child: _buildSavingsPage()),
+      PrimaryScrollController(controller: _billsScroll, child: _buildBillsPage()),
+      PrimaryScrollController(controller: _reportScroll, child: _buildReportPage()),
+      PrimaryScrollController(controller: _settingsScroll, child: _buildSettingsPage()),
     ];
 
     final destinations = const <NavigationDestination>[
@@ -694,82 +774,891 @@ class _MainTabsPageState extends State<MainTabsPage> {
       ),
     ];
 
-    final isJoint = (_accountDoc?['isJoint'] as bool?) ?? false;
-    final createdBy = (_accountDoc?['createdBy'] as String?) ?? '';
-    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    final isOwner = createdBy.isNotEmpty && createdBy == uid;
+  // Top bar removed; joint indicator moved into Settings
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            const Text('BudgetBuddy'),
-            const SizedBox(width: 8),
-            if (_accountDoc != null)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: isJoint
-                      ? Colors.green.withOpacity(0.12)
-                      : Colors.blueGrey.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Row(
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) => _scheduleTapAutosave(),
+      onPointerUp: (_) => _scheduleTapAutosave(),
+      child: Scaffold(
+      backgroundColor: Colors.transparent,
+      body: Stack(
+        children: [
+          // Gradient background with app content
+          AppGradientBackground(
+            child: SafeArea(
+              child: Padding(
+                // Add bottom padding so content isn't obscured by floating tabs
+                padding: const EdgeInsets.only(bottom: 86),
+                child: Column(
                   children: [
-                    Icon(
-                      isJoint ? Icons.groups_2 : Icons.person_outline,
-                      size: 16,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      isJoint ? 'Joint' : 'Single-owner',
-                      style: const TextStyle(fontSize: 12),
+                    if (((widget.initialWarning ?? '').isNotEmpty) ||
+                        ((_cloudWarning ?? '').isNotEmpty))
+                      Material(
+                        color: Colors.amber.shade100,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Padding(
+                                padding: EdgeInsets.only(top: 2),
+                                child: Icon(Icons.warning_amber_rounded, size: 18),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if ((widget.initialWarning ?? '').isNotEmpty)
+                                      Text(
+                                        widget.initialWarning!,
+                                        style: const TextStyle(fontSize: 12),
+                                      ),
+                                    if ((widget.initialWarning ?? '').isNotEmpty &&
+                                        (_cloudWarning ?? '').isNotEmpty)
+                                      const SizedBox(height: 4),
+                                    if ((_cloudWarning ?? '').isNotEmpty)
+                                      Text(
+                                        _cloudWarning!,
+                                        style: const TextStyle(fontSize: 12),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              if ((_cloudWarning ?? '').isNotEmpty)
+                                TextButton(
+                                  onPressed: _showCloudFixDialog,
+                                  child: const Text('How to fix'),
+                                ),
+                              if ((_cloudWarning ?? '').isNotEmpty)
+                                IconButton(
+                                  tooltip: 'Dismiss',
+                                  icon: const Icon(Icons.close, size: 18),
+                                  onPressed: () => setState(() => _cloudWarning = null),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    Expanded(
+                      child: PageView.builder(
+                        controller: _pageController,
+                        physics: const BouncingScrollPhysics(),
+                        allowImplicitScrolling: true,
+                        onPageChanged: (i) {
+                          setState(() => _index = i);
+                          // Light haptic on settle
+                          HapticFeedback.lightImpact();
+                        },
+                        itemCount: pages.length,
+                        itemBuilder: (context, i) {
+                          return _FancyPage(
+                            controller: _pageController,
+                            index: i,
+                            child: _KeepAlive(child: pages[i]),
+                          );
+                        },
+                      ),
                     ),
                   ],
                 ),
               ),
-          ],
-        ),
-        actions: [
-          if (isOwner && _accountDoc != null)
-            Row(
-              children: [
-                const Text('Joint'),
-                Switch(
-                  value: isJoint,
-                  onChanged: (v) async {
-                    try {
-                      await _repo!.setIsJoint(v);
-                      if (!mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            v
-                                ? 'Joint access enabled'
-                                : 'Joint access disabled',
-                          ),
-                        ),
-                      );
-                    } catch (e) {
-                      if (!mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Failed to update: $e')),
-                      );
-                    }
-                  },
-                ),
-                const SizedBox(width: 8),
-              ],
             ),
+          ),
+          // Floating glass tab bar overlay
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: _AnimatedGlassTabBar(
+              currentIndex: _index,
+              destinations: destinations,
+              onTap: (i) {
+                if (i == _index) {
+                  // Scroll current tab to top
+                  final map = {
+                    0: _homeScroll,
+                    1: _expensesScroll,
+                    2: _savingsScroll,
+                    3: _billsScroll,
+                    4: _reportScroll,
+                    5: _settingsScroll,
+                  };
+                  final ctrl = map[i];
+                  if (ctrl != null && ctrl.hasClients) {
+                    ctrl.animateTo(
+                      0,
+                      duration: const Duration(milliseconds: 350),
+                      curve: Curves.easeOutCubic,
+                    );
+                  }
+                  return;
+                }
+                HapticFeedback.selectionClick();
+                _pageController.animateToPage(
+                  i,
+                  duration: const Duration(milliseconds: 360),
+                  curve: Curves.easeOutCubic,
+                );
+              },
+            ),
+          ),
         ],
       ),
-      body: IndexedStack(index: _index, children: pages),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: destinations,
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+    ),
+  );
+  }
+
+  @override
+  void dispose() {
+    _tapAutosave?.cancel();
+    _pageController.dispose();
+  _homeScroll.dispose();
+  _expensesScroll.dispose();
+  _savingsScroll.dispose();
+  _billsScroll.dispose();
+  _reportScroll.dispose();
+  _settingsScroll.dispose();
+    super.dispose();
+  }
+
+  void _showCloudWarning(Object e) {
+    String message = 'Saved locally. Cloud sync failed.';
+    if (e is FirebaseException) {
+      if (e.code == 'permission-denied') {
+        message =
+            'Cloud sync blocked by security: App Check or membership required.';
+      } else if (e.message != null && e.message!.isNotEmpty) {
+        message = 'Cloud sync failed: ${e.message}';
+      }
+    } else {
+      final s = e.toString();
+      if (s.contains('permission-denied')) {
+        message =
+            'Cloud sync blocked by security: App Check or membership required.';
+      } else {
+        message = 'Cloud sync failed: $s';
+      }
+    }
+    if (!mounted) return;
+    setState(() => _cloudWarning = message);
+  }
+
+  void _showCloudFixDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Fix cloud sync'),
+        content: const Text(
+          'In development, enable App Check debug: run a debug build, copy the token from logs, and add it in Firebase Console → App Check → Debug tokens.\n\nAlso ensure you are a member of this account: the owner must approve your join request (Settings → Owner tools → Join requests). Then try again.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
       ),
+    );
+  }
+
+  // Settings
+  Widget _buildSettingsPage() {
+    final createdBy = (_accountDoc?['createdBy'] as String?) ?? '';
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final isOwner = createdBy.isNotEmpty && createdBy == uid;
+    final isJoint = (_accountDoc?['isJoint'] as bool?) ?? false;
+
+    return ListView(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      children: [
+        // Header row with Joint indicator and Add Account
+  Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: Row(
+            children: [
+              if (_accountDoc != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: isJoint
+                        ? Colors.green.withValues(alpha: 0.12)
+                        : Colors.blueGrey.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        isJoint ? Icons.groups_2 : Icons.person_outline,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        isJoint ? 'Joint' : 'Single-owner',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              const Spacer(),
+              FilledButton.icon(
+                onPressed: () {
+                  // Reuse the same flow as Add Account sheet previously
+                  _showAddAccountInline(context);
+                },
+                icon: const Icon(Icons.add_circle_outline),
+                label: const Text('Add Account'),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: Text(
+            'Account',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        ),
+        ListTile(
+          leading: const Icon(Icons.swap_horiz),
+          title: const Text('Switch account'),
+          subtitle: const Text('Change the active account'),
+          onTap: () => _showAccountSwitcher(context),
+        ),
+        ListTile(
+          leading: const Icon(Icons.manage_accounts_outlined),
+          title: const Text('Manage accounts'),
+          subtitle: const Text('Rename, remove, or reorder linked accounts'),
+          onTap: () async {
+            await Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const ManageAccountsPage()),
+            );
+            // Reload aliases and accounts after return
+            final la = box.get('linkedAccounts');
+            if (la is List) {
+              setState(() => _linkedAccounts = la.whereType<String>().toList());
+            }
+            final aliases = box.get('accountAliases');
+            if (aliases is Map) {
+              setState(
+                () => _accountAliases = aliases.map(
+                  (k, v) => MapEntry(k.toString(), v.toString()),
+                ),
+              );
+            }
+          },
+        ),
+        if (isOwner) ...[
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: Text(
+              'Owner tools',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+          ),
+          SwitchListTile.adaptive(
+            secondary: const Icon(Icons.groups_2_outlined),
+            title: const Text('Enable Joint access'),
+            subtitle: const Text(
+              'Allow others to request access to this account',
+            ),
+            value: isJoint,
+            onChanged: (v) async {
+              if (_repo == null) return;
+              try {
+                await _repo!.setIsJoint(v);
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      v ? 'Joint access enabled' : 'Joint access disabled',
+                    ),
+                  ),
+                );
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('Failed to update: $e')));
+              }
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.how_to_reg_outlined),
+            title: const Text('Join requests'),
+            subtitle: const Text('Approve or deny pending access requests'),
+            onTap: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => JoinRequestsPage(accountId: widget.accountId),
+                ),
+              );
+            },
+          ),
+        ],
+        const Divider(height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Text('App', style: Theme.of(context).textTheme.titleMedium),
+        ),
+        ListTile(
+          leading: const Icon(Icons.cloud_done_outlined),
+          title: const Text('Validate cloud setup'),
+          subtitle: const Text('Check App Check and membership access'),
+          onTap: _validateCloudSetup,
+        ),
+        const Divider(height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Text('Receipts backup', style: Theme.of(context).textTheme.titleMedium),
+        ),
+        ListTile(
+          leading: const Icon(Icons.file_download_outlined),
+          title: const Text('Export receipts'),
+          subtitle: const Text('Create a manifest.json and copy images (by receiptUid)'),
+          onTap: _exportReceipts,
+        ),
+        ListTile(
+          leading: const Icon(Icons.file_upload_outlined),
+          title: const Text('Import receipts'),
+          subtitle: const Text('Paste a folder path containing manifest.json'),
+          onTap: _importReceiptsPrompt,
+        ),
+        FutureBuilder<PackageInfo>(
+          future: PackageInfo.fromPlatform(),
+          builder: (context, snap) {
+            final version = snap.hasData
+                ? '${snap.data!.version} (${snap.data!.buildNumber})'
+                : '…';
+            final email = FirebaseAuth.instance.currentUser?.email ?? '—';
+            return ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('About'),
+              subtitle: Text(
+                'BudgetBuddy • v$version\nDeveloper: Bryan L. Tejano\nActive account: ${_accountAliases[widget.accountId] ?? widget.accountId}\nGmail: $email',
+              ),
+            );
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.logout),
+          title: const Text('Sign out'),
+          onTap: () async {
+            try {
+              await AuthService().signOut();
+              if (!mounted) return;
+              // After sign out, clear to root and let MyApp's auth listener show LoginPage
+              Navigator.of(context, rootNavigator: true)
+                  .popUntil((route) => route.isFirst);
+            } catch (e) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('Failed to sign out: $e')));
+            }
+          },
+        ),
+        const SizedBox(height: 48),
+      ],
+    );
+  }
+
+  Future<void> _exportReceipts() async {
+    if (_repo == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cloud not initialized. Sign in and open an account first.')),
+      );
+      return;
+    }
+    try {
+      final svc = ReceiptBackupService(accountId: widget.accountId, repo: _repo!);
+      final dir = await svc.exportAll();
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Export complete'),
+          content: SelectableText('Saved to:\n${dir.path}'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Export failed: $e')),
+      );
+    }
+  }
+
+  Future<void> _importReceiptsPrompt() async {
+    // Try a native directory or file picker first
+    try {
+      // Prefer picking the manifest.json file for clarity
+      final manifestResult = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+        dialogTitle: 'Pick manifest.json',
+        allowMultiple: false,
+      );
+      if (manifestResult != null && manifestResult.files.isNotEmpty) {
+        final filePath = manifestResult.files.single.path;
+        if (filePath != null && filePath.toLowerCase().endsWith('manifest.json')) {
+          final dir = Directory(File(filePath).parent.path);
+          await _importReceiptsFromDirectory(dir);
+          return;
+        }
+      }
+      // Fallback: pick a directory
+      final dirPath = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Pick receipts backup folder');
+      if (dirPath != null) {
+        await _importReceiptsFromDirectory(Directory(dirPath));
+        return;
+      }
+    } catch (_) {
+      // fall through to manual paste prompt
+    }
+
+    // Manual path entry fallback (in case picker is not available)
+    String path = '';
+    bool busy = false;
+    String? error;
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setM) => AlertDialog(
+          title: const Text('Import receipts'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Paste the folder path that contains manifest.json'),
+              const SizedBox(height: 8),
+              TextField(
+                onChanged: (v) => setM(() => path = v.trim()),
+                decoration: const InputDecoration(
+                  labelText: 'Folder path',
+                  prefixIcon: Icon(Icons.folder_open),
+                ),
+              ),
+              if (error != null) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(error!, style: const TextStyle(color: Colors.red)),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      setM(() {
+                        busy = true;
+                        error = null;
+                      });
+                      try {
+                        final dir = Directory(path);
+                        if (!await dir.exists()) {
+                          throw 'Folder not found';
+                        }
+                        if (_repo == null) throw 'Cloud not initialized';
+                        final svc = ReceiptBackupService(accountId: widget.accountId, repo: _repo!);
+                        final results = await svc.importAll(dir);
+                        if (!mounted) return;
+                        Navigator.of(ctx).pop();
+                        final attached = results.where((r) => r['status'] == 'attached_by_uid').length;
+                        final cachedOnly = results.where((r) => r['status'] == 'cached_only').length;
+                        final skipped = results.where((r) => r['status'] == 'skipped_no_file').length;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Imported: attached $attached, cached $cachedOnly, skipped $skipped'),
+                            duration: const Duration(seconds: 5),
+                          ),
+                        );
+                        // Trigger a refresh to overlay paths
+                        setState(() {});
+                      } catch (e) {
+                        setM(() {
+                          error = 'Failed: $e';
+                          busy = false;
+                        });
+                      }
+                    },
+              child: const Text('Import'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _importReceiptsFromDirectory(Directory dir) async {
+    try {
+      if (_repo == null) throw 'Cloud not initialized';
+      final svc = ReceiptBackupService(accountId: widget.accountId, repo: _repo!);
+      final results = await svc.importAll(dir);
+      if (!mounted) return;
+      final attached = results.where((r) => r['status'] == 'attached_by_uid').length;
+      final cachedOnly = results.where((r) => r['status'] == 'cached_only').length;
+      final skipped = results.where((r) => r['status'] == 'skipped_no_file').length;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Imported: attached $attached, cached $cachedOnly, skipped $skipped'),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+      setState(() {});
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Import failed: $e')),
+      );
+    }
+  }
+
+  Future<void> _validateCloudSetup() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (ctx) => const AlertDialog(
+          title: Text('Validate cloud setup'),
+          content: Text('You are not signed in.'),
+        ),
+      );
+      return;
+    }
+    final db = FirebaseFirestore.instance;
+    final accRef = db.collection('accounts').doc(widget.accountId);
+
+    bool readOk = false;
+    bool memberWriteOk = false;
+    Object? readErr;
+    Object? writeErr;
+
+    // Baseline read (should pass if App Check is trusted and rules allow reads)
+    try {
+      await accRef.get();
+      readOk = true;
+    } catch (e) {
+      readErr = e;
+    }
+
+    // Member-only write to meta (merge). Passes only if you are a member/owner.
+    if (readOk) {
+      try {
+        await accRef.collection('meta').doc('config').set({
+          'healthCheckedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        memberWriteOk = true;
+      } catch (e) {
+        writeErr = e;
+      }
+    }
+
+    if (!mounted) return;
+    final issues = <String>[];
+    if (!readOk) {
+      issues.add('App Check not trusted or rules deny baseline read.');
+    }
+    if (readOk && !memberWriteOk) {
+      issues.add('You are not a member of this account.');
+    }
+
+    final details = StringBuffer();
+    if (!readOk && readErr != null) {
+      details.writeln('Read error: $readErr');
+    }
+    if (readOk && !memberWriteOk && writeErr != null) {
+      details.writeln('Write error: $writeErr');
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Validate cloud setup'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    readOk ? Icons.check_circle : Icons.error,
+                    color: readOk ? Colors.green : Colors.red,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      readOk
+                          ? 'App Check / baseline read: OK'
+                          : 'App Check / baseline read: FAILED',
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(
+                    memberWriteOk ? Icons.check_circle : Icons.error,
+                    color: memberWriteOk ? Colors.green : Colors.red,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      memberWriteOk
+                          ? 'Membership write: OK'
+                          : 'Membership write: FAILED',
+                    ),
+                  ),
+                ],
+              ),
+              if (issues.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  'Next steps:',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                if (!readOk)
+                  const Text(
+                    '• Add App Check debug token in Firebase Console → App Check → Debug tokens, then relaunch the app.',
+                  ),
+                if (readOk && !memberWriteOk)
+                  const Text(
+                    '• Ask the owner to approve your join request (Settings → Owner tools → Join requests).',
+                  ),
+                if (details.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    details.toString(),
+                    style: const TextStyle(fontSize: 12, color: Colors.black87),
+                  ),
+                ],
+              ],
+              if (issues.isEmpty) ...[
+                const SizedBox(height: 12),
+                const Text('All good! Cloud sync should work.'),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAccountSwitcher(BuildContext context) async {
+    final cs = Theme.of(context).colorScheme;
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Switch account'),
+        content: SizedBox(
+          width: 360,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: _linkedAccounts.length,
+            itemBuilder: (c, i) {
+              final id = _linkedAccounts[i];
+              final isActive = id == widget.accountId;
+              return ListTile(
+                leading: Icon(Icons.credit_card, color: cs.primary),
+                title: Text(id),
+                trailing: isActive
+                    ? const Icon(Icons.check_circle, color: Colors.green)
+                    : null,
+                onTap: () => Navigator.of(ctx).pop(id),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (selected != null && selected != widget.accountId) {
+      _openAccount(selected);
+    }
+  }
+
+  void _showAddAccountInline(BuildContext context) {
+    final ctrl = TextEditingController();
+    String? error;
+    bool sending = false;
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setM) => AlertDialog(
+          title: const Text('Add account'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: ctrl,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(
+                  labelText: 'Account number',
+                  hintText: 'BB-ABCD-1234 or BB-PERS-... ',
+                  prefixIcon: Icon(Icons.credit_card),
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (error != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(error!, style: const TextStyle(color: Colors.red)),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              onPressed: sending
+                  ? null
+                  : () async {
+                      final id = ctrl.text.trim().toUpperCase();
+                      if (id.isEmpty) {
+                        setM(() => error = 'Enter an account number');
+                        return;
+                      }
+                      setM(() {
+                        sending = true;
+                        error = null;
+                      });
+                      try {
+                        final user = FirebaseAuth.instance.currentUser;
+                        if (user == null) throw 'Not signed in';
+                        final repo = SharedAccountRepository(
+                          accountId: id,
+                          uid: user.uid,
+                        );
+                        // Validate account
+                        final acc = await repo.getAccountOnce();
+                        if (acc == null) throw 'Account not found';
+                        final isJoint = (acc['isJoint'] as bool?) ?? false;
+                        if (!isJoint) {
+                          throw 'Only joint accounts can be linked. Ask the owner to enable Joint first.';
+                        }
+                        final members = List<String>.from(acc['members'] ?? []);
+                        final myUid = user.uid;
+                        if (members.contains(myUid)) {
+                          final setList = {..._linkedAccounts};
+                          setList.add(id);
+                          final arr = setList.toList();
+                          box.put('linkedAccounts', arr);
+                          if (mounted) setState(() => _linkedAccounts = arr);
+                          if (mounted) Navigator.of(ctx).pop();
+                          if (mounted)
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Already added in your account. Go to Settings → Switch account.',
+                                ),
+                              ),
+                            );
+                          return;
+                        }
+
+                        await repo.requestJoinVerification(
+                          displayName: user.displayName,
+                          email: user.email,
+                        );
+
+                        StreamSubscription? sub;
+                        sub = FirebaseFirestore.instance
+                            .collection('accounts')
+                            .doc(id)
+                            .collection('joinRequests')
+                            .doc(myUid)
+                            .snapshots()
+                            .listen((doc) async {
+                          final status = (doc.data()?['status'] as String?) ?? 'pending';
+                          if (status == 'approved') {
+                            await repo.ensureMembership(
+                              displayName: user.displayName,
+                              email: user.email,
+                            );
+                            final setList = {..._linkedAccounts};
+                            setList.add(id);
+                            final arr = setList.toList();
+                            box.put('linkedAccounts', arr);
+                            if (mounted) setState(() => _linkedAccounts = arr);
+                            if (mounted)
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'Access approved. "$id" added to Switch account.',
+                                  ),
+                                ),
+                              );
+                            await sub?.cancel();
+                          }
+                        });
+
+                        if (mounted) Navigator.of(ctx).pop();
+                        if (mounted)
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Request Add Account status: Pending. You\'ll be added automatically once approved.',
+                              ),
+                              duration: Duration(seconds: 5),
+                            ),
+                          );
+                      } catch (e) {
+                        setM(() => error = 'Failed: $e');
+                      } finally {
+                        setM(() => sending = false);
+                      }
+                    },
+              icon: const Icon(Icons.add_circle_outline),
+              label: const Text('Add Account'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Removed unused _showAddAccountSheet after moving Add Account to Settings.
+
+  void _openAccount(String id) {
+    box.put('accountId', id);
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => _EnsureAndOpen(accountId: id)),
     );
   }
 
@@ -787,6 +1676,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
     return ExpensesTab(
       rows: rows,
       limit: limit,
+      savingsRows: List<Map<String, dynamic>>.from(tableData['Savings'] ?? []),
       onRowsChanged: (newRows) async {
         // Immediate UI + offline persistence
         setState(() {
@@ -809,6 +1699,8 @@ class _MainTabsPageState extends State<MainTabsPage> {
                 ...newRows[i],
                 'id': res['id'],
                 if (res['path'] != null) 'LocalReceiptPath': res['path'],
+                if (((newRows[i]['ReceiptUid'] ?? '') as String).isNotEmpty)
+                  'ReceiptUid': (newRows[i]['ReceiptUid'] ?? '').toString(),
               };
             }
           }
@@ -872,6 +1764,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
               accountId: widget.accountId,
               collection: 'expenses',
               docId: id,
+              receiptUid: (currentById[id]?['ReceiptUid'] ?? '').toString(),
             );
             _saveLocalOnly();
           }
@@ -910,42 +1803,118 @@ class _MainTabsPageState extends State<MainTabsPage> {
         }
       },
       onSetLimit: () {
-        final ctrl = TextEditingController(
-          text: (tabLimits['Expenses'] ?? 0.0).toString(),
-        );
         showDialog(
           context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('Set Monthly Limit'),
-            content: TextField(
-              controller: ctrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(hintText: 'Enter limit amount'),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () =>
-                    Navigator.of(dialogContext, rootNavigator: true).pop(),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () async {
-                  final value = double.tryParse(ctrl.text) ?? 0.0;
-                  await _repo?.setExpenseLimit(value);
-                  // Also update local cache for immediate/offline UX
-                  if (mounted) {
-                    setState(() {
-                      tabLimits['Expenses'] = value;
-                    });
-                    _saveLocalOnly();
-                  }
-                  if (mounted) {
-                    Navigator.of(dialogContext, rootNavigator: true).pop();
-                  }
-                },
-                child: const Text('Save'),
-              ),
-            ],
+          builder: (dialogContext) => StatefulBuilder(
+            builder: (ctx, setLocal) {
+              // Read current period from persisted Expenses tab preference
+              final currentPeriod =
+                  (box.get('expensesSummaryPeriod') as String?) ?? 'this_month';
+              String keyFor(String period) {
+                switch (period) {
+                  case 'this_week':
+                    return 'expensesLimitPercent_this_week';
+                  case 'last_week':
+                    return 'expensesLimitPercent_last_week';
+                  case 'last_month':
+                    return 'expensesLimitPercent_last_month';
+                  case 'all_expenses':
+                    return 'expensesLimitPercent_all_expenses';
+                  case 'this_month':
+                  default:
+                    return 'expensesLimitPercent_this_month';
+                }
+              }
+
+              final periodLabel = switch (currentPeriod) {
+                'this_week' => 'This Week',
+                'last_week' => 'Last Week',
+                'last_month' => 'Last Month',
+                'all_expenses' => 'All Expenses',
+                _ => 'This Month',
+              };
+              final helper = 'Percent of $periodLabel savings';
+              final valueCtrl = TextEditingController(
+                text: (box.get(keyFor(currentPeriod)) ?? '').toString(),
+              );
+              return AlertDialog(
+                title: const Text('Set Limit'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: valueCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Percent',
+                        suffixText: '%',
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        helper,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () =>
+                        Navigator.of(dialogContext, rootNavigator: true).pop(),
+                    child: const Text('Cancel'),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      final numVal = double.tryParse(valueCtrl.text);
+                      final val = (numVal ?? 0).clamp(0.0, 100.0);
+                      // Apply to all Expenses filters so it works across period switches
+                      for (final k in const [
+                        'expensesLimitPercent_this_week',
+                        'expensesLimitPercent_this_month',
+                        'expensesLimitPercent_last_week',
+                        'expensesLimitPercent_last_month',
+                        'expensesLimitPercent_all_expenses',
+                      ]) {
+                        box.put(k, val);
+                      }
+                      // Persist to cloud so it survives sign-in across devices
+                      try {
+                        if (_repo != null) {
+                          await _repo!.setExpensesLimitPercents({
+                            'this_week': (box.get('expensesLimitPercent_this_week') as num?)?.toDouble() ?? val,
+                            'this_month': (box.get('expensesLimitPercent_this_month') as num?)?.toDouble() ?? val,
+                            'last_week': (box.get('expensesLimitPercent_last_week') as num?)?.toDouble() ?? val,
+                            'last_month': (box.get('expensesLimitPercent_last_month') as num?)?.toDouble() ?? val,
+                            'all_expenses': (box.get('expensesLimitPercent_all_expenses') as num?)?.toDouble() ?? val,
+                          });
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Limit percent saved to cloud.')),
+                            );
+                          }
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Cloud save failed. Kept locally. Use Settings > Validate cloud setup.'),
+                            ),
+                          );
+                        }
+                      }
+                      if (mounted) _saveLocalOnly();
+                      if (mounted) {
+                        Navigator.of(dialogContext, rootNavigator: true).pop();
+                      }
+                    },
+                    child: const Text('Save'),
+                  ),
+                ],
+              );
+            },
           ),
         );
       },
@@ -988,6 +1957,8 @@ class _MainTabsPageState extends State<MainTabsPage> {
                 ...newRows[i],
                 'id': res['id'],
                 if (res['path'] != null) 'LocalReceiptPath': res['path'],
+                if (((newRows[i]['ReceiptUid'] ?? '') as String).isNotEmpty)
+                  'ReceiptUid': (newRows[i]['ReceiptUid'] ?? '').toString(),
               };
             }
           }
@@ -1046,6 +2017,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
               accountId: widget.accountId,
               collection: 'savings',
               docId: id,
+              receiptUid: (currentById[id]?['ReceiptUid'] ?? '').toString(),
             );
             _saveLocalOnly();
           }
@@ -1082,42 +2054,119 @@ class _MainTabsPageState extends State<MainTabsPage> {
         }
       },
       onSetGoal: () {
-        final ctrl = TextEditingController(
-          text: (savingsGoals['Savings'] ?? 0.0).toString(),
-        );
+        // Percent-only input (no dropdown, no amount option). Per-period storage.
         showDialog(
           context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('Set Savings Goal'),
-            content: TextField(
-              controller: ctrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(hintText: 'Enter goal amount'),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () =>
-                    Navigator.of(dialogContext, rootNavigator: true).pop(),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () async {
-                  final value = double.tryParse(ctrl.text) ?? 0.0;
-                  await _repo?.setSavingsGoal(value);
-                  // Also update local cache for immediate/offline UX
-                  if (mounted) {
-                    setState(() {
-                      savingsGoals['Savings'] = value;
-                    });
-                    _saveLocalOnly();
-                  }
-                  if (mounted) {
-                    Navigator.of(dialogContext, rootNavigator: true).pop();
-                  }
-                },
-                child: const Text('Save'),
-              ),
-            ],
+          builder: (dialogContext) => StatefulBuilder(
+            builder: (ctx, setLocal) {
+              // Helper text uses current Savings filter period stored in Hive.
+              final String period =
+                  (box.get('savingsSummaryPeriod') ?? 'this_month').toString();
+              String keyFor(String p) {
+                switch (p) {
+                  case 'this_week':
+                    return 'savingsGoalPercent_this_week';
+                  case 'last_week':
+                    return 'savingsGoalPercent_last_week';
+                  case 'last_month':
+                    return 'savingsGoalPercent_last_month';
+                  case 'all_savings':
+                    return 'savingsGoalPercent_all_savings';
+                  case 'this_month':
+                  default:
+                    return 'savingsGoalPercent_this_month';
+                }
+              }
+
+              final String periodLabel = switch (period) {
+                'this_week' => 'This Week',
+                'last_week' => 'Last Week',
+                'last_month' => 'Last Month',
+                'all_savings' => 'All Savings',
+                _ => 'This Month',
+              };
+              final helper = 'Percent of $periodLabel savings';
+              final valueCtrl = TextEditingController(
+                text: (box.get(keyFor(period)) ?? '').toString(),
+              );
+              return AlertDialog(
+                title: const Text('Set Savings Goal'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: valueCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Percent',
+                        suffixText: '%',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        helper,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () =>
+                        Navigator.of(dialogContext, rootNavigator: true).pop(),
+                    child: const Text('Cancel'),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      final numVal = double.tryParse(valueCtrl.text) ?? 0.0;
+                      final val = numVal.clamp(0.0, 100.0);
+                      // Apply to all Savings filters so it works across period switches
+                      for (final k in const [
+                        'savingsGoalPercent_this_week',
+                        'savingsGoalPercent_this_month',
+                        'savingsGoalPercent_last_week',
+                        'savingsGoalPercent_last_month',
+                        'savingsGoalPercent_all_savings',
+                      ]) {
+                        box.put(k, val);
+                      }
+                      // Persist to cloud meta so it survives sign-in
+                      try {
+                        if (_repo != null) {
+                          await _repo!.setSavingsGoalPercents({
+                            'this_week': (box.get('savingsGoalPercent_this_week') as num?)?.toDouble() ?? val,
+                            'this_month': (box.get('savingsGoalPercent_this_month') as num?)?.toDouble() ?? val,
+                            'last_week': (box.get('savingsGoalPercent_last_week') as num?)?.toDouble() ?? val,
+                            'last_month': (box.get('savingsGoalPercent_last_month') as num?)?.toDouble() ?? val,
+                            'all_savings': (box.get('savingsGoalPercent_all_savings') as num?)?.toDouble() ?? val,
+                          });
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Savings goal percent saved to cloud.')),
+                            );
+                          }
+                        }
+                      } catch (e) {
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Cloud save failed. Kept locally. Use Settings > Validate cloud setup.'),
+                            ),
+                          );
+                        }
+                      }
+                      if (mounted) _saveLocalOnly();
+                      if (mounted) {
+                        Navigator.of(dialogContext, rootNavigator: true).pop();
+                      }
+                    },
+                    child: const Text('Save'),
+                  ),
+                ],
+              );
+            },
           ),
         );
       },
@@ -1146,12 +2195,20 @@ class _MainTabsPageState extends State<MainTabsPage> {
     item = {...item, 'clientHash': ch};
 
     if (hasBytes) {
+      // Ensure a stable receipt uid exists on first attach
+      String receiptUid = (item['ReceiptUid'] ?? item['receiptUid'] ?? '')
+          .toString();
+      if (receiptUid.isEmpty) {
+        receiptUid = _genReceiptUid();
+        item = {...item, 'ReceiptUid': receiptUid};
+      }
       try {
         final path = await LocalReceiptService().saveReceipt(
           accountId: widget.accountId,
           collection: collection,
           docId: localId,
           bytes: item['Receipt'] as Uint8List,
+          receiptUid: (item['ReceiptUid'] ?? '').toString(),
         );
         setState(() {
           if (collection == 'expenses') {
@@ -1171,11 +2228,12 @@ class _MainTabsPageState extends State<MainTabsPage> {
                         _clientHash(r) == ch),
               );
             }
-            if (idx != -1) {
+      if (idx != -1) {
               list[idx] = {
                 ...list[idx],
                 'id': localId,
                 'LocalReceiptPath': path,
+        'ReceiptUid': (item['ReceiptUid'] ?? '').toString(),
                 'clientHash': ch,
               };
               tableData['Expenses'] = list;
@@ -1195,11 +2253,12 @@ class _MainTabsPageState extends State<MainTabsPage> {
                         _clientHash(r) == ch),
               );
             }
-            if (idx != -1) {
+      if (idx != -1) {
               list[idx] = {
                 ...list[idx],
                 'id': localId,
                 'LocalReceiptPath': path,
+        'ReceiptUid': (item['ReceiptUid'] ?? '').toString(),
                 'clientHash': ch,
               };
               tableData['Savings'] = list;
@@ -1220,7 +2279,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
     try {
       if (_repo == null) return; // offline only; local already saved
 
-      if (isUpdate && localId.isNotEmpty) {
+  if (isUpdate && localId.isNotEmpty) {
         if (collection == 'expenses') {
           await _repo!.updateExpense(localId, item);
         } else {
@@ -1247,6 +2306,8 @@ class _MainTabsPageState extends State<MainTabsPage> {
                   ...list[idx],
                   'id': newId,
                   if (path != null && path.isNotEmpty) 'LocalReceiptPath': path,
+                  if ((item['ReceiptUid'] ?? '').toString().isNotEmpty)
+                    'ReceiptUid': (item['ReceiptUid'] ?? '').toString(),
                   'clientHash': ch,
                 };
                 if (path != null) {
@@ -1266,6 +2327,8 @@ class _MainTabsPageState extends State<MainTabsPage> {
                   ...list[idx],
                   'id': newId,
                   if (path != null && path.isNotEmpty) 'LocalReceiptPath': path,
+                  if ((item['ReceiptUid'] ?? '').toString().isNotEmpty)
+                    'ReceiptUid': (item['ReceiptUid'] ?? '').toString(),
                   'clientHash': ch,
                 };
                 if (path != null) {
@@ -1281,6 +2344,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
       }
     } catch (e) {
       if (mounted) {
+        _showCloudWarning(e);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Saved locally. Cloud sync failed: $e')),
         );
@@ -1309,11 +2373,453 @@ class _MainTabsPageState extends State<MainTabsPage> {
       categoryColors: _reportCategoryColors,
     );
   }
+
+  // ... end of _MainTabsPageState
 }
 
-class _SettingsPlaceholder extends StatelessWidget {
-  const _SettingsPlaceholder();
+// Keep tab widget state alive when swiping between pages
+class _KeepAlive extends StatefulWidget {
+  final Widget child;
+  const _KeepAlive({required this.child});
   @override
-  Widget build(BuildContext context) =>
-      const Center(child: Text('Settings (coming soon)'));
+  State<_KeepAlive> createState() => _KeepAliveState();
+}
+
+class _KeepAliveState extends State<_KeepAlive>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
+  }
+}
+
+// Subtle animated transform/opacity for nicer swipe transitions
+class _FancyPage extends StatelessWidget {
+  final PageController controller;
+  final int index;
+  final Widget child;
+  const _FancyPage({
+    required this.controller,
+    required this.index,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) {
+        double page = controller.initialPage.toDouble();
+        if (controller.hasClients && controller.position.haveDimensions) {
+          page = controller.page ?? controller.initialPage.toDouble();
+        }
+        final delta = (index - page).toDouble();
+        final d = delta.abs();
+  final scale = 1.0 - (0.03 * d).clamp(0.0, 0.03);
+  final opacity = 1.0 - (0.08 * d).clamp(0.0, 0.08);
+  final shiftX = (-16.0 * delta).clamp(-22.0, 22.0);
+        return Opacity(
+          opacity: opacity,
+          child: Transform.translate(
+            offset: Offset(shiftX, 0),
+            child: Transform.scale(
+              scale: scale,
+              alignment: Alignment.center,
+              child: child,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _AnimatedGlassTabBar extends StatelessWidget {
+  final int currentIndex;
+  final List<NavigationDestination> destinations;
+  final ValueChanged<int> onTap;
+
+  const _AnimatedGlassTabBar({
+    required this.currentIndex,
+    required this.destinations,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(20),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+            child: Container(
+              height: 68,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.26),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    blurRadius: 12,
+                    offset: const Offset(0, -4),
+                  ),
+                ],
+                border: Border(
+                  top: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.35),
+                    width: 0.6,
+                  ),
+                  left: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.2),
+                    width: 0.6,
+                  ),
+                  right: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.2),
+                    width: 0.6,
+                  ),
+                  bottom: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.15),
+                    width: 0.6,
+                  ),
+                ),
+              ),
+              child: _PillTabs(
+                currentIndex: currentIndex,
+                destinations: destinations,
+                onTap: onTap,
+                textStyle: theme.textTheme.labelMedium,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PillTabs extends StatefulWidget {
+  final int currentIndex;
+  final List<NavigationDestination> destinations;
+  final ValueChanged<int> onTap;
+  final TextStyle? textStyle;
+
+  const _PillTabs({
+    required this.currentIndex,
+    required this.destinations,
+    required this.onTap,
+    this.textStyle,
+  });
+
+  @override
+  State<_PillTabs> createState() => _PillTabsState();
+}
+
+class _PillTabsState extends State<_PillTabs>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _bounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    );
+    _bounce = TweenSequence<double>(
+      [
+        TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.06), weight: 60),
+        TweenSequenceItem(tween: Tween(begin: 1.06, end: 1.0), weight: 40),
+      ],
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
+  }
+
+  @override
+  void didUpdateWidget(covariant _PillTabs oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentIndex != widget.currentIndex) {
+      _controller.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final count = widget.destinations.length;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final itemW = width / count;
+        final pillLeft = itemW * widget.currentIndex + 6;
+        final pillW = itemW - 12;
+        final tint = _pillTintForIndex(widget.currentIndex);
+        return Stack(
+          children: [
+            // Ripple under the pill
+            Positioned(
+              left: pillLeft + pillW / 2 - 28,
+              top: 6 + 28 - 28,
+              width: 56,
+              height: 56,
+              child: AnimatedBuilder(
+                animation: _controller,
+                builder: (context, _) {
+                  final scale = 0.6 + 0.8 * _controller.value;
+                  final opacity = (0.30 * (1.0 - _controller.value)).clamp(
+                    0.0,
+                    0.30,
+                  );
+                  return Opacity(
+                    opacity: opacity,
+                    child: Transform.scale(
+                      scale: scale,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: tint.withValues(alpha: 0.22),
+                          boxShadow: [
+                            BoxShadow(
+                              color: tint.withValues(alpha: 0.22),
+                              blurRadius: 18,
+                              spreadRadius: 6,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            // Moving pill
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOutCubic,
+              left: pillLeft,
+              top: 6,
+              width: pillW,
+              height: 56,
+              child: ScaleTransition(
+                scale: _bounce,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        tint.withValues(alpha: 0.38),
+                        Colors.white.withValues(alpha: 0.22),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: tint.withValues(alpha: 0.28),
+                        blurRadius: 12,
+                        offset: const Offset(0, 6),
+                      ),
+                    ],
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.35),
+                      width: 0.8,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Row(
+              children: [
+                for (int i = 0; i < count; i++)
+                  Expanded(
+                    child: _TabItem(
+                      selected: i == widget.currentIndex,
+                      destination: widget.destinations[i],
+                      onTap: () => widget.onTap(i),
+                      controller: _controller,
+                      textStyle: widget.textStyle,
+                      activeColor: _pillTintForIndex(i),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Color _pillTintForIndex(int index) {
+    if (index < 0 || index >= widget.destinations.length) {
+      return Colors.blueAccent;
+    }
+    final label = widget.destinations[index].label.toLowerCase();
+    if (label.contains('home')) return const Color(0xFF8A7CF6); // purple
+    if (label.contains('expense')) return const Color(0xFFFF6B8B); // pink/red
+    if (label.contains('saving')) return const Color(0xFF2EC4B6); // teal
+    if (label.contains('bill')) return const Color(0xFFFFC857); // amber
+    if (label.contains('report') || label.contains('chart')) {
+      return const Color(0xFF4DA3FF); // blue
+    }
+    if (label.contains('setting')) {
+      return const Color(0xFF7C8DB5); // indigo/grey
+    }
+    return Colors.blueAccent;
+  }
+}
+
+class _TabItem extends StatelessWidget {
+  final bool selected;
+  final NavigationDestination destination;
+  final VoidCallback onTap;
+  final AnimationController controller;
+  final TextStyle? textStyle;
+  final Color activeColor;
+
+  const _TabItem({
+    required this.selected,
+    required this.destination,
+    required this.onTap,
+    required this.controller,
+    this.textStyle,
+    required this.activeColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final baseColor = Theme.of(context).colorScheme.onSurface;
+    final active = activeColor;
+    final inactive = baseColor.withValues(alpha: 0.6);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final showLabel =
+            selected && constraints.maxWidth >= 88; // hide on tight
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () {
+              HapticFeedback.selectionClick();
+              controller.forward(from: 0);
+              onTap();
+            },
+            splashColor: Colors.transparent,
+            highlightColor: Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 56, minWidth: 72),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 10,
+                ),
+                child: AnimatedDefaultTextStyle(
+                  duration: const Duration(milliseconds: 250),
+                  style: (textStyle ?? const TextStyle()).copyWith(
+                    color: selected ? active : inactive,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      TweenAnimationBuilder<double>(
+                        tween: Tween(begin: 1.0, end: selected ? 1.12 : 1.0),
+                        duration: const Duration(milliseconds: 180),
+                        curve: Curves.easeOut,
+                        builder: (context, scale, child) => Transform.scale(
+                          scale: scale,
+                          child: IconTheme(
+                            data: IconThemeData(
+                              color: selected ? active : inactive,
+                            ),
+                            child: selected
+                                ? (destination.selectedIcon ?? destination.icon)
+                                : destination.icon,
+                          ),
+                        ),
+                      ),
+                      if (showLabel) ...[
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            destination.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// (removed placeholder; real settings implemented in _buildSettingsPage)
+
+class _EnsureAndOpen extends StatefulWidget {
+  final String accountId;
+  const _EnsureAndOpen({required this.accountId});
+  @override
+  State<_EnsureAndOpen> createState() => _EnsureAndOpenState();
+}
+
+class _EnsureAndOpenState extends State<_EnsureAndOpen> {
+  bool _ready = false;
+  String? _ensureError;
+
+  @override
+  void initState() {
+    super.initState();
+    _ensure();
+  }
+
+  Future<void> _ensure() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      try {
+        final repo = SharedAccountRepository(
+          accountId: widget.accountId,
+          uid: user.uid,
+        );
+        await repo.ensureMembership(
+          displayName: user.displayName,
+          email: user.email,
+        );
+      } catch (e, st) {
+        _ensureError = 'Cloud join failed: $e';
+        // ignore: avoid_print
+        print(_ensureError);
+        // ignore: avoid_print
+        print(st);
+      }
+    }
+    if (mounted) setState(() => _ready = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_ready) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    return MainTabsPage(
+      accountId: widget.accountId,
+      initialWarning: _ensureError,
+    );
+  }
 }

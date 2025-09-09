@@ -42,6 +42,24 @@ class NotificationService {
     await _plugin.cancel(id);
   }
 
+  Future<void> showNow(
+    int id, {
+    required String title,
+    required String body,
+  }) async {
+    await init();
+    const androidDetails = AndroidNotificationDetails(
+      'general_channel',
+      'General',
+      channelDescription: 'General notifications',
+      importance: Importance.max,
+      priority: Priority.high,
+    );
+    const iosDetails = DarwinNotificationDetails();
+    const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+    await _plugin.show(id, title, body, details);
+  }
+
   Future<void> schedule(
     int id, {
     required String title,
@@ -58,6 +76,8 @@ class NotificationService {
       channelDescription: 'Bill due reminders',
       importance: Importance.max,
       priority: Priority.high,
+      playSound: true,
+      enableVibration: true,
     );
     const iosDetails = DarwinNotificationDetails();
     const details = NotificationDetails(
@@ -74,7 +94,7 @@ class NotificationService {
             body,
             tzTime,
             details,
-            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+            androidScheduleMode: AndroidScheduleMode.inexact,
             uiLocalNotificationDateInterpretation:
                 UILocalNotificationDateInterpretation.absoluteTime,
             matchDateTimeComponents: null,
@@ -87,7 +107,7 @@ class NotificationService {
             body,
             _nextWeekly(tzTime),
             details,
-            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+            androidScheduleMode: AndroidScheduleMode.inexact,
             uiLocalNotificationDateInterpretation:
                 UILocalNotificationDateInterpretation.absoluteTime,
             matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
@@ -100,7 +120,7 @@ class NotificationService {
             body,
             _nextMonthly(tzTime),
             details,
-            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+            androidScheduleMode: AndroidScheduleMode.inexact,
             uiLocalNotificationDateInterpretation:
                 UILocalNotificationDateInterpretation.absoluteTime,
             matchDateTimeComponents: DateTimeComponents.dayOfMonthAndTime,
@@ -113,7 +133,7 @@ class NotificationService {
             body,
             _nextYearly(tzTime),
             details,
-            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+            androidScheduleMode: AndroidScheduleMode.inexact,
             uiLocalNotificationDateInterpretation:
                 UILocalNotificationDateInterpretation.absoluteTime,
             matchDateTimeComponents: DateTimeComponents.dateAndTime,
@@ -121,8 +141,10 @@ class NotificationService {
           break;
       }
     } catch (e) {
-      // Gracefully ignore scheduling failures (e.g., exact alarms not permitted)
-      // Optionally, you could fallback to a basic show() here or log to a box.
+      // Fallback: if scheduling failed, fire an immediate notification so the user still gets alerted
+      await showNow(id,
+          title: title,
+          body: body);
     }
   }
 

@@ -8,8 +8,8 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        // ✅ Ensure this is the latest stable version
-        classpath("com.google.gms:google-services:4.3.15")
+        // Align with AGP 8.5.x
+        classpath("com.google.gms:google-services:4.4.2")
     }
 }
 

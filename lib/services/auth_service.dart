@@ -32,7 +32,13 @@ class AuthService {
   }
 
   Future<void> signOut() async {
+    try {
+      // Sign out of Google and revoke the granted scopes so next sign-in shows the picker.
+      await _googleSignIn.signOut();
+      await _googleSignIn.disconnect();
+    } catch (_) {
+      // ignore best-effort
+    }
     await _auth.signOut();
-    await _googleSignIn.signOut();
   }
 }
