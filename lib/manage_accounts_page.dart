@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class ManageAccountsPage extends StatefulWidget {
   const ManageAccountsPage({super.key});
@@ -17,11 +18,34 @@ class _ManageAccountsPageState extends State<ManageAccountsPage> {
   void initState() {
     super.initState();
     box = Hive.box('budgetBox');
-    accounts = List<String>.from(box.get('linkedAccounts') ?? []);
-    aliases = Map<String, String>.from(
-      (box.get('accountAliases') as Map?) ?? {},
-    );
-    active = box.get('accountId') as String?;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    final linkedKey = uid != null ? 'linkedAccounts_$uid' : 'linkedAccounts';
+    final aliasesKey = uid != null ? 'accountAliases_$uid' : 'accountAliases';
+    final activeKey = uid != null ? 'accountId_$uid' : 'accountId';
+    // Read per-user with migration from legacy global keys
+    final laUser = box.get(linkedKey);
+    if (laUser is List && laUser.isNotEmpty) {
+      accounts = List<String>.from(laUser);
+    } else {
+      final laLegacy = box.get('linkedAccounts');
+      accounts = List<String>.from(laLegacy ?? []);
+      if (uid != null && accounts.isNotEmpty) box.put(linkedKey, accounts);
+    }
+    final alUser = box.get(aliasesKey);
+    if (alUser is Map && alUser.isNotEmpty) {
+      aliases = Map<String, String>.from(
+        alUser.map((k, v) => MapEntry(k.toString(), v.toString())),
+      );
+    } else {
+      final alLegacy = box.get('accountAliases');
+      aliases = Map<String, String>.from(
+        (alLegacy as Map? ?? {}).map(
+          (k, v) => MapEntry(k.toString(), v.toString()),
+        ),
+      );
+      if (uid != null && aliases.isNotEmpty) box.put(aliasesKey, aliases);
+    }
+    active = box.get(activeKey) as String? ?? box.get('accountId') as String?;
   }
 
   @override
@@ -82,7 +106,11 @@ class _ManageAccountsPageState extends State<ManageAccountsPage> {
                         } else {
                           aliases[id] = val;
                         }
-                        box.put('accountAliases', aliases);
+                        final uid = FirebaseAuth.instance.currentUser?.uid;
+                        final aliasesKey = uid != null
+                            ? 'accountAliases_$uid'
+                            : 'accountAliases';
+                        box.put(aliasesKey, aliases);
                       });
                     }
                   },
@@ -114,11 +142,21 @@ class _ManageAccountsPageState extends State<ManageAccountsPage> {
                       setState(() {
                         accounts.removeAt(i);
                         aliases.remove(id);
-                        box.put('linkedAccounts', accounts);
-                        box.put('accountAliases', aliases);
+                        final uid = FirebaseAuth.instance.currentUser?.uid;
+                        final linkedKey = uid != null
+                            ? 'linkedAccounts_$uid'
+                            : 'linkedAccounts';
+                        final aliasesKey = uid != null
+                            ? 'accountAliases_$uid'
+                            : 'accountAliases';
+                        final activeKey = uid != null
+                            ? 'accountId_$uid'
+                            : 'accountId';
+                        box.put(linkedKey, accounts);
+                        box.put(aliasesKey, aliases);
                         if (active == id) {
                           active = accounts.isNotEmpty ? accounts.first : null;
-                          box.put('accountId', active);
+                          box.put(activeKey, active);
                         }
                       });
                     }

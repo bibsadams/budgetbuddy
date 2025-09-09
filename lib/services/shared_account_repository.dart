@@ -20,6 +20,9 @@ class SharedAccountRepository {
   CollectionReference<Map<String, dynamic>> get _savingsCol =>
       _accountDoc.collection('savings');
 
+  CollectionReference<Map<String, dynamic>> get _billsCol =>
+      _accountDoc.collection('bills');
+
   CollectionReference<Map<String, dynamic>> get _membersCol =>
       _accountDoc.collection('members');
 
@@ -124,13 +127,30 @@ class SharedAccountRepository {
         });
         // creator implicitly joined
       } else if (needsJoin) {
-        // Non-owners are not allowed to self-join even if joint. Require approval.
+        // If you're the owner (createdBy == uid), allow seamless access on new device.
         if (createdBy == uid) {
-          // Owner opening their account on a new device: ensure they are in members
           members.add(uid);
           tx.update(_accountDoc, {'members': members});
         } else {
-          throw StateError('Awaiting owner approval to join this account.');
+          // For non-owners, only allow join if account is joint AND an approval doc exists.
+          final data = accountSnap.data() ?? {};
+          final isJoint = (data['isJoint'] as bool?) ?? false;
+          if (!isJoint) {
+            // Not a joint account: this Gmail should create/own its own account instead.
+            throw StateError(
+              'This account is single-owner. Use your own account.',
+            );
+          }
+          // Check for an approved join request to allow automatic membership.
+          final reqSnap = await tx.get(_joinRequestsCol.doc(uid));
+          final status = (reqSnap.data()?['status'] as String?) ?? 'pending';
+          if (status == 'approved') {
+            members.add(uid);
+            tx.update(_accountDoc, {'members': members});
+            // Also upsert member doc below after transaction
+          } else {
+            throw StateError('Awaiting owner approval to join this account.');
+          }
         }
       }
     });
@@ -166,6 +186,36 @@ class SharedAccountRepository {
     } catch (_) {
       // Non-fatal; account still usable. Can be restricted by rules; adjust as needed.
     }
+  }
+
+  // Explicitly provision a new personal account for this uid (used for “Create” flow)
+  Future<void> createPersonalAccount({String? email}) async {
+    await _db.runTransaction((tx) async {
+      final snap = await tx.get(_accountDoc);
+      if (snap.exists) return; // already exists
+      tx.set(_accountDoc, {
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdBy': uid,
+        if (email != null) 'createdByEmail': email,
+        'members': [uid],
+        'isJoint': false,
+      });
+    });
+    try {
+      await _metaDoc.set({
+        'limits': {'Expenses': 0.0},
+        'goals': {'Savings': 0.0},
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (_) {}
+    try {
+      await _membersCol.doc(uid).set({
+        'uid': uid,
+        'email': email,
+        'joinedAt': FieldValue.serverTimestamp(),
+        'lastAccessAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (_) {}
   }
 
   // Owner: list join requests for this account
@@ -250,6 +300,13 @@ class SharedAccountRepository {
         .map((qs) => qs.docs.map((d) => _fromDoc(d)).toList());
   }
 
+  Stream<List<Map<String, dynamic>>> billsStream() {
+    return _billsCol
+        .orderBy('dueDate', descending: true)
+        .snapshots()
+        .map((qs) => qs.docs.map((d) => _fromBillDoc(d)).toList());
+  }
+
   // One-shot fetchers for backup/restore flows
   Future<List<Map<String, dynamic>>> fetchAllExpensesOnce() async {
     final qs = await _expensesCol.orderBy('date', descending: true).get();
@@ -314,6 +371,23 @@ class SharedAccountRepository {
     await _savingsCol.doc(id).delete();
   }
 
+  Future<String> addBill(Map<String, dynamic> item, {String? withId}) async {
+    if (withId != null && withId.isNotEmpty) {
+      await _billsCol.doc(withId).set(_toBillDoc(item));
+      return withId;
+    }
+    final ref = await _billsCol.add(_toBillDoc(item));
+    return ref.id;
+  }
+
+  Future<void> updateBill(String id, Map<String, dynamic> item) async {
+    await _billsCol.doc(id).set(_toBillDoc(item), SetOptions(merge: true));
+  }
+
+  Future<void> deleteBill(String id) async {
+    await _billsCol.doc(id).delete();
+  }
+
   Future<void> setExpenseLimit(double amount) async {
     await _metaDoc.set({
       'limits': {'Expenses': amount},
@@ -361,6 +435,37 @@ class SharedAccountRepository {
     };
   }
 
+  Map<String, dynamic> _fromBillDoc(DocumentSnapshot<Map<String, dynamic>> d) {
+    final data = d.data() ?? {};
+    String dueDateStr = '';
+    final rawDue = data['dueDate'];
+    if (rawDue is Timestamp) {
+      final dt = rawDue.toDate();
+      dueDateStr =
+          '${dt.year.toString().padLeft(4, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+    } else if (rawDue != null) {
+      // Accept ISO 8601 or yyyy-MM-dd stored as string
+      final dt = DateTime.tryParse(rawDue.toString());
+      if (dt != null) {
+        dueDateStr =
+            '${dt.year.toString().padLeft(4, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+      } else {
+        dueDateStr = rawDue.toString();
+      }
+    }
+    return {
+      'id': d.id,
+      'Name': data['name'] ?? 'Bill',
+      'Amount': (data['amount'] as num?)?.toDouble() ?? 0.0,
+      'Due Date': dueDateStr,
+      'Time': data['time']?.toString() ?? '',
+      'Repeat': data['repeat']?.toString() ?? 'None',
+      'Enabled': (data['enabled'] as bool?) ?? true,
+      'Note': data['note']?.toString() ?? '',
+      'CreatedBy': data['createdBy'],
+    };
+  }
+
   Map<String, dynamic> _toDoc(Map<String, dynamic> item) {
     return {
       'category': item['Category'],
@@ -372,6 +477,20 @@ class SharedAccountRepository {
       // Persist stable receipt uid if present
       if ((item['ReceiptUid'] ?? item['receiptUid']) != null)
         'receiptUid': item['ReceiptUid'] ?? item['receiptUid'],
+      'createdBy': uid,
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+  }
+
+  Map<String, dynamic> _toBillDoc(Map<String, dynamic> item) {
+    return {
+      'name': item['Name'],
+      'amount': (item['Amount'] as num?)?.toDouble() ?? 0.0,
+      'dueDate': _parseDate(item['Due Date']),
+      'time': item['Time'], // 'HH:mm'
+      'repeat': item['Repeat'] ?? 'None',
+      'enabled': item['Enabled'] ?? true,
+      'note': item['Note'],
       'createdBy': uid,
       'updatedAt': FieldValue.serverTimestamp(),
     };

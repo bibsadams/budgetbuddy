@@ -40,6 +40,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
   // Streams
   Stream<List<Map<String, dynamic>>>? _expenses$;
   Stream<List<Map<String, dynamic>>>? _savings$;
+  Stream<List<Map<String, dynamic>>>? _bills$;
   Stream<Map<String, dynamic>>? _meta$;
   Stream<Map<String, dynamic>?>? _account$;
 
@@ -67,8 +68,16 @@ class _MainTabsPageState extends State<MainTabsPage> {
   // Multi-account
   List<String> _linkedAccounts = const [];
   Map<String, String> _accountAliases = const {};
+  // One-time migration flags
+  bool _billsMigrated = false; // per-account flag read from Hive
   // Debounced autosave on global taps
   Timer? _tapAutosave;
+  // Realtime linked accounts for Switch/Manage
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _accMemberSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _accOwnerSub;
+  final Set<String> _accMemberIds = {};
+  final Set<String> _accOwnerIds = {};
+  String? _uid;
   void _scheduleTapAutosave() {
     _tapAutosave?.cancel();
     _tapAutosave = Timer(const Duration(milliseconds: 500), () {
@@ -245,8 +254,18 @@ class _MainTabsPageState extends State<MainTabsPage> {
       tableData['Savings'] = [];
     }
 
-    // Bills stays local
-    tableData.putIfAbsent('Bills', () => []);
+    // Bills: keep a per-account offline store
+    final offlineBills = box.get('offline_bills_${widget.accountId}') as List?;
+    if (offlineBills != null) {
+      tableData['Bills'] = offlineBills
+          .whereType<Map>()
+          .map<Map<String, dynamic>>(
+            (m) => m.map((k, v) => MapEntry(k.toString(), v)),
+          )
+          .toList();
+    } else {
+      tableData['Bills'] = [];
+    }
 
     // Limits/goals
     final rawTabLimits = box.get('tabLimits') as Map?;
@@ -312,6 +331,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
     tb.remove('Expenses');
     tb.remove('Savings');
     tb.remove('Report');
+    tb.remove('Bills');
     box.put('tableData', tb);
 
     // Persist offline expenses/savings
@@ -333,29 +353,82 @@ class _MainTabsPageState extends State<MainTabsPage> {
       'localReceipts_savings_${widget.accountId}',
       _localReceiptPathsSavings,
     );
+    // Persist Bills per account
+    box.put(
+      'offline_bills_${widget.accountId}',
+      tableData['Bills'] ?? <Map<String, dynamic>>[],
+    );
   }
 
   void _initShared() {
     _loadLocalOnly();
     // Load linked accounts list from Hive for account switcher
-    final la = box.get('linkedAccounts');
-    if (la is List) {
-      _linkedAccounts = la.whereType<String>().toList();
-    }
-    final aliases = box.get('accountAliases');
-    if (aliases is Map) {
-      _accountAliases = aliases.map(
-        (k, v) => MapEntry(k.toString(), v.toString()),
-      );
-    }
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return; // guarded by login flow
+    _uid = user.uid;
+    // Use per-user keys with migration from legacy globals
+    final uid = user.uid;
+    final linkedKey = 'linkedAccounts_$uid';
+    final aliasesKey = 'accountAliases_$uid';
+    final laUser = box.get(linkedKey);
+    if (laUser is List && laUser.isNotEmpty) {
+      _linkedAccounts = laUser.whereType<String>().toList();
+    } else {
+      // Migrate from legacy global if present
+      final laLegacy = box.get('linkedAccounts');
+      if (laLegacy is List && laLegacy.isNotEmpty) {
+        _linkedAccounts = laLegacy.whereType<String>().toList();
+        box.put(linkedKey, _linkedAccounts);
+      }
+    }
+    final aliasesUser = box.get(aliasesKey);
+    if (aliasesUser is Map && aliasesUser.isNotEmpty) {
+      _accountAliases = aliasesUser.map(
+        (k, v) => MapEntry(k.toString(), v.toString()),
+      );
+    } else {
+      final aliasesLegacy = box.get('accountAliases');
+      if (aliasesLegacy is Map && aliasesLegacy.isNotEmpty) {
+        _accountAliases = aliasesLegacy.map(
+          (k, v) => MapEntry(k.toString(), v.toString()),
+        );
+        box.put(aliasesKey, _accountAliases);
+      }
+    }
     _repo = SharedAccountRepository(accountId: widget.accountId, uid: user.uid);
     _expenses$ = _repo!.expensesStream();
     _savings$ = _repo!.savingsStream();
+    _bills$ = _repo!.billsStream();
     _meta$ = _repo!.metaStream();
     _account$ = _repo!.accountStream();
     _account$!.listen((doc) => setState(() => _accountDoc = doc ?? {}));
+
+    // use class method _refreshLinkedAccountsCache()
+
+    // Live-sync linked accounts list for Switch/Manage (auto-add when approved)
+    final db = FirebaseFirestore.instance;
+    _accMemberSub?.cancel();
+    _accOwnerSub?.cancel();
+    _accMemberSub = db
+        .collection('accounts')
+        .where('members', arrayContains: user.uid)
+        .snapshots()
+        .listen((qs) {
+          _accMemberIds
+            ..clear()
+            ..addAll(qs.docs.map((d) => d.id));
+          _refreshLinkedAccountsCache();
+        });
+    _accOwnerSub = db
+        .collection('accounts')
+        .where('createdBy', isEqualTo: user.uid)
+        .snapshots()
+        .listen((qs) {
+          _accOwnerIds
+            ..clear()
+            ..addAll(qs.docs.map((d) => d.id));
+          _refreshLinkedAccountsCache();
+        });
 
     // Listen and integrate into tableData in-memory
     _expenses$!.listen((remoteRows) {
@@ -549,6 +622,37 @@ class _MainTabsPageState extends State<MainTabsPage> {
       });
       _saveLocalOnly();
     });
+    // Initialize per-account migrated flag
+    _billsMigrated =
+        (box.get('bills_migrated_${widget.accountId}') as bool?) ?? false;
+
+    _bills$!.listen((remoteRows) async {
+      if (remoteRows.isEmpty) {
+        // Optional one-time migration per-account (safe now that Bills are scoped per account)
+        if (!_billsMigrated) {
+          final localBills = List<Map<String, dynamic>>.from(
+            tableData['Bills'] ?? const <Map<String, dynamic>>[],
+          );
+          if (localBills.isNotEmpty && _repo != null) {
+            try {
+              for (final b in localBills) {
+                final id = (b['id'] ?? '').toString();
+                await _repo!.addBill(b, withId: id.isEmpty ? null : id);
+              }
+              _billsMigrated = true;
+              box.put('bills_migrated_${widget.accountId}', true);
+            } catch (e) {
+              _showCloudWarning(e);
+            }
+          }
+        }
+        return;
+      }
+      setState(() {
+        tableData['Bills'] = remoteRows;
+      });
+      _saveLocalOnly();
+    });
     _meta$!.listen((meta) {
       // Overlay amount-based legacy values
       final limits = (meta['limits'] as Map?) ?? {};
@@ -584,6 +688,14 @@ class _MainTabsPageState extends State<MainTabsPage> {
             (savingsGoals['Savings'] ?? 0.0);
       });
     });
+  }
+
+  void _refreshLinkedAccountsCache() {
+    final uid = _uid;
+    if (uid == null) return;
+    final arr = {..._accMemberIds, ..._accOwnerIds}.toList()..sort();
+    setState(() => _linkedAccounts = arr);
+    box.put('linkedAccounts_$uid', arr);
   }
 
   // Immediately persist attachment for a newly added row at a known index.
@@ -947,6 +1059,8 @@ class _MainTabsPageState extends State<MainTabsPage> {
     _billsScroll.dispose();
     _reportScroll.dispose();
     _settingsScroll.dispose();
+    _accMemberSub?.cancel();
+    _accOwnerSub?.cancel();
     super.dispose();
   }
 
@@ -1050,6 +1164,26 @@ class _MainTabsPageState extends State<MainTabsPage> {
             style: Theme.of(context).textTheme.titleMedium,
           ),
         ),
+        // Membership visibility note
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(top: 2),
+                child: Icon(Icons.info_outline, size: 16),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'You\'ll see accounts you own or those shared with this Gmail. To add accounts from your other gmails, use Add Account and have the owner approve under Join requests.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+        ),
         ListTile(
           leading: const Icon(Icons.swap_horiz),
           title: const Text('Switch account'),
@@ -1065,11 +1199,16 @@ class _MainTabsPageState extends State<MainTabsPage> {
               MaterialPageRoute(builder: (_) => const ManageAccountsPage()),
             );
             // Reload aliases and accounts after return
-            final la = box.get('linkedAccounts');
+            final uid = FirebaseAuth.instance.currentUser?.uid;
+            final la = box.get(
+              uid != null ? 'linkedAccounts_$uid' : 'linkedAccounts',
+            );
             if (la is List) {
               setState(() => _linkedAccounts = la.whereType<String>().toList());
             }
-            final aliases = box.get('accountAliases');
+            final aliases = box.get(
+              uid != null ? 'accountAliases_$uid' : 'accountAliases',
+            );
             if (aliases is Map) {
               setState(
                 () => _accountAliases = aliases.map(
@@ -1648,7 +1787,8 @@ class _MainTabsPageState extends State<MainTabsPage> {
                           final setList = {..._linkedAccounts};
                           setList.add(id);
                           final arr = setList.toList();
-                          box.put('linkedAccounts', arr);
+                          final linkedKey = 'linkedAccounts_${user.uid}';
+                          box.put(linkedKey, arr);
                           if (mounted) setState(() => _linkedAccounts = arr);
                           if (mounted) Navigator.of(ctx).pop();
                           if (mounted)
@@ -1686,7 +1826,8 @@ class _MainTabsPageState extends State<MainTabsPage> {
                                 final setList = {..._linkedAccounts};
                                 setList.add(id);
                                 final arr = setList.toList();
-                                box.put('linkedAccounts', arr);
+                                final linkedKey = 'linkedAccounts_${user.uid}';
+                                box.put(linkedKey, arr);
                                 if (mounted)
                                   setState(() => _linkedAccounts = arr);
                                 if (mounted)
@@ -2482,10 +2623,54 @@ class _MainTabsPageState extends State<MainTabsPage> {
     return BillsTab(
       rows: rows,
       onRowsChanged: (newRows) {
+        // Compute diff vs previous rows and sync with Firestore when possible
+        final prev = List<Map<String, dynamic>>.from(rows);
+        final prevById = {
+          for (final r in prev)
+            if (r['id'] != null && (r['id'] as String).isNotEmpty)
+              (r['id'] as String): r,
+        };
+        final nextById = {
+          for (final r in newRows)
+            if (r['id'] != null && (r['id'] as String).isNotEmpty)
+              (r['id'] as String): r,
+        };
+        Future(() async {
+          if (_repo != null) {
+            try {
+              // Deletions
+              for (final id in prevById.keys) {
+                if (!nextById.containsKey(id)) {
+                  await _repo!.deleteBill(id);
+                }
+              }
+              // Adds/Updates
+              for (final r in newRows) {
+                final id = (r['id'] ?? '').toString();
+                final isNew = id.isEmpty || !prevById.containsKey(id);
+                if (isNew) {
+                  final assignedId = await _repo!.addBill(
+                    r,
+                    withId: id.isEmpty ? null : id,
+                  );
+                  if (id.isEmpty) {
+                    r['id'] = assignedId;
+                  }
+                } else {
+                  await _repo!.updateBill(id, r);
+                }
+              }
+            } catch (e) {
+              _showCloudWarning(e);
+            }
+          }
+        });
         setState(() {
           tableData['Bills'] = newRows;
           _saveLocalOnly();
         });
+        // Also write per-account offline snapshot right away
+        box.put('offline_bills_${widget.accountId}', newRows);
       },
     );
   }

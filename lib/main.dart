@@ -50,9 +50,13 @@ class _MyAppState extends State<MyApp> {
       if (mounted && signedInNow != isSignedIn) {
         setState(() => isSignedIn = signedInNow);
         if (!signedInNow) {
-          // Optionally clear active account selection on sign-out
+          // Clear any per-user active selection (kept per uid)
           final box = await Hive.openBox('budgetBox');
-          await box.delete('accountId');
+          final prevUid = user?.uid;
+          if (prevUid != null) {
+            await box.delete('accountId_$prevUid');
+            await box.delete('linkedAccounts_$prevUid');
+          }
           setState(() => accountId = null);
         }
       }
@@ -61,8 +65,35 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _bootstrapFromLocal() async {
     final box = await Hive.openBox('budgetBox');
-    final savedAccounts = List<String>.from(box.get('linkedAccounts') ?? []);
-    final savedActive = box.get('accountId') as String?;
+    final user = FirebaseAuth.instance.currentUser;
+    final uid = user?.uid;
+    final linkedKey = uid != null ? 'linkedAccounts_$uid' : 'linkedAccounts';
+    final activeKey = uid != null ? 'accountId_$uid' : 'accountId';
+    List<String> savedAccounts = List<String>.from(box.get(linkedKey) ?? []);
+    String? savedActive = box.get(activeKey) as String?;
+    // If signed-in and empty cache, fetch accounts once (owner or member)
+    if (uid != null && savedAccounts.isEmpty) {
+      try {
+        final q1 = await FirebaseFirestore.instance
+            .collection('accounts')
+            .where('members', arrayContains: uid)
+            .limit(20)
+            .get();
+        final memberIds = q1.docs.map((d) => d.id);
+        final q2 = await FirebaseFirestore.instance
+            .collection('accounts')
+            .where('createdBy', isEqualTo: uid)
+            .limit(20)
+            .get();
+        final ownerIds = q2.docs.map((d) => d.id);
+        savedAccounts = {...memberIds, ...ownerIds}.toList();
+        if (savedAccounts.isNotEmpty) {
+          await box.put(linkedKey, savedAccounts);
+          savedActive ??= savedAccounts.first;
+          await box.put(activeKey, savedActive);
+        }
+      } catch (_) {}
+    }
     setState(() {
       linkedAccounts = savedAccounts;
       accountId =
@@ -82,12 +113,18 @@ class _MyAppState extends State<MyApp> {
               linkedAccounts: linkedAccounts,
               onSwitchAccount: (id) async {
                 final box = await Hive.openBox('budgetBox');
-                await box.put('accountId', id);
+                final uid = FirebaseAuth.instance.currentUser?.uid;
+                final activeKey = uid != null ? 'accountId_$uid' : 'accountId';
+                await box.put(activeKey, id);
                 setState(() => accountId = id);
               },
               onAccountsChanged: (list) async {
                 final box = await Hive.openBox('budgetBox');
-                await box.put('linkedAccounts', list);
+                final uid = FirebaseAuth.instance.currentUser?.uid;
+                final linkedKey = uid != null
+                    ? 'linkedAccounts_$uid'
+                    : 'linkedAccounts';
+                await box.put(linkedKey, list);
                 setState(() => linkedAccounts = List<String>.from(list));
               },
             )
@@ -95,48 +132,46 @@ class _MyAppState extends State<MyApp> {
               onSignIn: () async {
                 final box = await Hive.openBox('budgetBox');
                 final user = FirebaseAuth.instance.currentUser;
-                String? active = box.get('accountId') as String?;
+                final uid = user?.uid;
+                if (uid == null) return; // defensive
+                final linkedKey = 'linkedAccounts_$uid';
+                final activeKey = 'accountId_$uid';
+                String? active = box.get(activeKey) as String?;
                 List<String> savedAccounts = List<String>.from(
-                  box.get('linkedAccounts') ?? [],
+                  box.get(linkedKey) ?? [],
                 );
 
                 // Prefer an existing account if available
                 if (active == null) {
-                  if (savedAccounts.isNotEmpty) {
-                    active = savedAccounts.first;
-                  } else if (user != null) {
-                    // Try to find accounts in Firestore where this user is a member
-                    final uid = user.uid;
-                    try {
-                      final q1 = await FirebaseFirestore.instance
+                  // Ignore any previous user's local list; derive from server for current uid
+                  try {
+                    final q1 = await FirebaseFirestore.instance
+                        .collection('accounts')
+                        .where('members', arrayContains: uid)
+                        .limit(10)
+                        .get();
+                    var docs = q1.docs;
+                    if (docs.isEmpty) {
+                      final q2 = await FirebaseFirestore.instance
                           .collection('accounts')
-                          .where('members', arrayContains: uid)
+                          .where('createdBy', isEqualTo: uid)
                           .limit(10)
                           .get();
-                      var docs = q1.docs;
-                      if (docs.isEmpty) {
-                        // Fallback: owner-created accounts (older records)
-                        final q2 = await FirebaseFirestore.instance
-                            .collection('accounts')
-                            .where('createdBy', isEqualTo: uid)
-                            .limit(10)
-                            .get();
-                        docs = q2.docs;
-                      }
-                      if (docs.isNotEmpty) {
-                        savedAccounts = docs.map((d) => d.id).toSet().toList();
-                        active = savedAccounts.first;
-                        await box.put('linkedAccounts', savedAccounts);
-                        await box.put('accountId', active);
-                      }
-                    } catch (_) {
-                      // Network or rules issue; fall back to local provisioning
+                      docs = q2.docs;
                     }
+                    if (docs.isNotEmpty) {
+                      savedAccounts = docs.map((d) => d.id).toSet().toList();
+                      active = savedAccounts.first;
+                      await box.put(linkedKey, savedAccounts);
+                      await box.put(activeKey, active);
+                    }
+                  } catch (_) {
+                    // Network or rules issue; fall back to local provisioning
                   }
                 }
 
                 // If still no account, provision a new personal account id locally
-                if (active == null && user != null) {
+                if (active == null) {
                   String genId() {
                     const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
                     const digits = '23456789';
@@ -160,16 +195,15 @@ class _MyAppState extends State<MyApp> {
                   if (!savedAccounts.contains(active)) {
                     savedAccounts.insert(0, active);
                   }
-                  await box.put('linkedAccounts', savedAccounts);
-                  await box.put('accountId', active);
+                  await box.put(linkedKey, savedAccounts);
+                  await box.put(activeKey, active);
                 }
 
                 setState(() {
                   isSignedIn = true;
-                  accountId = active ?? box.get('accountId') as String?;
+                  accountId = active;
                   linkedAccounts = List<String>.from(
-                    box.get('linkedAccounts') ??
-                        (active != null ? [active] : []),
+                    box.get(linkedKey) ?? (active != null ? [active] : []),
                   );
                 });
               },
@@ -821,6 +855,8 @@ class _MainTabsPageProviderState extends State<MainTabsPageProvider> {
       try {
         rethrow;
       } catch (e, st) {
+        // If user chose an account they don't own and it's not joint/approved,
+        // show a warning but don't block app shell; user can switch or create.
         _ensureError = 'Cloud join failed: $e';
         // Log details for debugging in console
         // ignore: avoid_print

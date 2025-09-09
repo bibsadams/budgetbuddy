@@ -99,11 +99,17 @@ class BillsTab extends StatelessWidget {
                                         ),
                                       );
                                   if (edited != null) {
+                                    final merged = {
+                                      ...bill,
+                                      ...edited,
+                                      // Ensure id is preserved on edit
+                                      if (bill['id'] != null) 'id': bill['id'],
+                                    };
                                     final newRows =
                                         List<Map<String, dynamic>>.from(rows);
-                                    newRows[index] = edited;
+                                    newRows[index] = merged;
                                     onRowsChanged(newRows);
-                                    await _scheduleIfNeeded(index, edited);
+                                    await _scheduleIfNeeded(index, merged);
                                   }
                                 },
                               ),
@@ -163,12 +169,17 @@ class BillsTab extends StatelessWidget {
                                 ),
                               );
                           if (edited != null) {
+                            final merged = {
+                              ...bill,
+                              ...edited,
+                              if (bill['id'] != null) 'id': bill['id'],
+                            };
                             final newRows = List<Map<String, dynamic>>.from(
                               rows,
                             );
-                            newRows[index] = edited;
+                            newRows[index] = merged;
                             onRowsChanged(newRows);
-                            await _scheduleIfNeeded(index, edited);
+                            await _scheduleIfNeeded(index, merged);
                           }
                         },
                       ),
@@ -445,6 +456,8 @@ class _BillEditPageState extends State<_BillEditPage> {
                         'Repeat': _repeat,
                         'Enabled': _enabled,
                         'Note': _note.text.trim(),
+                        if (widget.initial?['id'] != null)
+                          'id': widget.initial!['id'],
                       };
                       Navigator.pop(context, data);
                     }
@@ -584,6 +597,8 @@ class _BillEditPageState extends State<_BillEditPage> {
                         'Repeat': _repeat,
                         'Enabled': _enabled,
                         'Note': _note.text.trim(),
+                        if (widget.initial?['id'] != null)
+                          'id': widget.initial!['id'],
                       };
                       Navigator.pop(context, data);
                     }
