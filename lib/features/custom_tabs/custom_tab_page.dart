@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -50,17 +51,20 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
 
   Future<void> _resolveReceiptPaths() async {
     if (_resolvingReceipts) return;
+    // Collect all receipt UIDs present in current rows
     final receiptUids = _rows
         .map((r) => (r['ReceiptUid'] ?? '').toString())
         .where((e) => e.isNotEmpty)
         .toSet();
-    final missing = receiptUids
-        .where((u) => !_receiptPaths.containsKey(u))
+
+    // Re-fetch for any uid we have never seen OR whose cached path is null (previously missing)
+    final toFetch = receiptUids
+        .where((u) => !_receiptPaths.containsKey(u) || _receiptPaths[u] == null)
         .toList();
-    if (missing.isEmpty) return;
+    if (toFetch.isEmpty) return;
     setState(() => _resolvingReceipts = true);
     try {
-      for (final uid in missing) {
+      for (final uid in toFetch) {
         try {
           final path = await LocalReceiptService().pathForReceiptUid(
             accountId: widget.accountId,
@@ -70,6 +74,7 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
           final file = File(path);
           _receiptPaths[uid] = await file.exists() ? path : null;
         } catch (_) {
+          // Keep null so we'll retry on next refresh attempt
           _receiptPaths[uid] = null;
         }
       }
@@ -173,20 +178,50 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
   Widget _buildRecordTile(Map<String, dynamic> r) {
     WidgetsBinding.instance.addPostFrameCallback((_) => _resolveReceiptPaths());
     final receiptUid = (r['ReceiptUid'] ?? '').toString();
-    final localPath = receiptUid.isNotEmpty ? _receiptPaths[receiptUid] : null;
-    final hasReceipt =
-        receiptUid.isNotEmpty || (r['ReceiptUrl'] ?? '').toString().isNotEmpty;
+  final localPath = receiptUid.isNotEmpty ? _receiptPaths[receiptUid] : null;
+  final receiptUrl = (r['ReceiptUrl'] ?? '').toString();
+  final memBytes = r['Receipt'];
+  final hasReceipt = receiptUid.isNotEmpty || receiptUrl.isNotEmpty || memBytes != null;
 
     Widget leading;
     if (hasReceipt) {
       final radius = BorderRadius.circular(12);
-      if (localPath == null && _resolvingReceipts) {
+      if (memBytes is Uint8List) {
+        leading = ClipRRect(
+          borderRadius: radius,
+          child: Image.memory(
+            memBytes,
+            key: ValueKey('mem-${r['id']}-${memBytes.length}'),
+            width: 48,
+            height: 48,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _thumbFallback(context),
+          ),
+        );
+      } else if (receiptUrl.isNotEmpty) {
+        final bustUrl = '$receiptUrl?v=${DateTime.now().millisecondsSinceEpoch}';
+        leading = ClipRRect(
+          borderRadius: radius,
+          child: Image.network(
+            bustUrl,
+            key: ValueKey('net-${r['id']}-$receiptUid'),
+            width: 48,
+            height: 48,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _thumbFallback(context),
+          ),
+        );
+      } else if (localPath == null && _resolvingReceipts) {
         leading = _shimmerBox(context);
       } else if (localPath != null && File(localPath).existsSync()) {
+        final stat = File(localPath).statSync();
+        // Evict any stale cached image for this file path (helps hot reload after overwrite)
+        PaintingBinding.instance.imageCache.evict(FileImage(File(localPath)));
         leading = ClipRRect(
           borderRadius: radius,
           child: Image.file(
             File(localPath),
+            key: ValueKey('file-${r['id']}-${stat.modified.millisecondsSinceEpoch}'),
             width: 48,
             height: 48,
             fit: BoxFit.cover,

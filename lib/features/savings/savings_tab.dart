@@ -820,27 +820,35 @@ class _SavingsSummaryHeader extends StatelessWidget {
 Widget _savingsReceiptThumb(Map<String, dynamic> row) {
   final local = (row['LocalReceiptPath'] ?? '') as String;
   final url = (row['ReceiptUrl'] ?? '') as String;
-  final hasMem = row['Receipt'] != null && row['Receipt'] is Uint8List;
+  final mem = row['Receipt'];
   Widget child;
-  if (local.isNotEmpty) {
-    child = Image.file(
-      File(local),
+  // 1. In-memory (fresh)
+  if (mem is Uint8List) {
+    child = Image.memory(
+      mem,
+      key: ValueKey('mem-${row['id']}-${mem.length}'),
       width: 64,
       height: 64,
       fit: BoxFit.cover,
       errorBuilder: (c, e, s) => _brokenThumb(),
     );
   } else if (url.isNotEmpty) {
+    final bustUrl = '$url?v=${DateTime.now().millisecondsSinceEpoch}';
     child = Image.network(
-      url,
+      bustUrl,
+      key: ValueKey('net-${row['id']}-${row['ReceiptUid'] ?? ''}'),
       width: 64,
       height: 64,
       fit: BoxFit.cover,
       errorBuilder: (c, e, s) => _brokenThumb(),
     );
-  } else if (hasMem) {
-    child = Image.memory(
-      row['Receipt'] as Uint8List,
+  } else if (local.isNotEmpty && File(local).existsSync()) {
+    final f = File(local);
+    final stat = f.statSync();
+    PaintingBinding.instance.imageCache.evict(FileImage(f));
+    child = Image.file(
+      f,
+      key: ValueKey('file-${row['id']}-${stat.modified.millisecondsSinceEpoch}'),
       width: 64,
       height: 64,
       fit: BoxFit.cover,

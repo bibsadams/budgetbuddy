@@ -641,28 +641,39 @@ class _ExpensesTabState extends State<ExpensesTab> {
   Widget _buildReceiptThumb(Map<String, dynamic> row) {
     final local = (row['LocalReceiptPath'] ?? '') as String;
     final url = (row['ReceiptUrl'] ?? '') as String;
-    if (local.isNotEmpty) {
-      return Image.file(
-        File(local),
-        width: 64,
-        height: 64,
-        fit: BoxFit.cover,
-        errorBuilder: (c, e, s) => _brokenThumb(),
-      );
-    }
-    if (url.isNotEmpty) {
-      return Image.network(
-        url,
-        width: 64,
-        height: 64,
-        fit: BoxFit.cover,
-        errorBuilder: (c, e, s) => _brokenThumb(),
-      );
-    }
     final mem = row['Receipt'];
-    if (mem != null && mem is Uint8List) {
+
+    // 1. In-memory bytes (fresh from edit page)
+    if (mem is Uint8List) {
       return Image.memory(
         mem,
+        key: ValueKey('mem-${row['id']}-${mem.length}'),
+        width: 64,
+        height: 64,
+        fit: BoxFit.cover,
+        errorBuilder: (c, e, s) => _brokenThumb(),
+      );
+    }
+    // 2. Network receipt URL with cache-bust
+    if (url.isNotEmpty) {
+      final bustUrl = '$url?v=${DateTime.now().millisecondsSinceEpoch}';
+      return Image.network(
+        bustUrl,
+        key: ValueKey('net-${row['id']}-${row['ReceiptUid'] ?? ''}'),
+        width: 64,
+        height: 64,
+        fit: BoxFit.cover,
+        errorBuilder: (c, e, s) => _brokenThumb(),
+      );
+    }
+    // 3. Local file (evict stale cache, use modified timestamp for key)
+    if (local.isNotEmpty && File(local).existsSync()) {
+      final f = File(local);
+      final stat = f.statSync();
+      PaintingBinding.instance.imageCache.evict(FileImage(f));
+      return Image.file(
+        f,
+        key: ValueKey('file-${row['id']}-${stat.modified.millisecondsSinceEpoch}'),
         width: 64,
         height: 64,
         fit: BoxFit.cover,
