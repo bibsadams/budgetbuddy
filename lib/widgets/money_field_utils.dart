@@ -1,6 +1,9 @@
 import 'package:intl/intl.dart';
 
-final NumberFormat _currencyNoSymbol = NumberFormat.currency(symbol: '', decimalDigits: 2);
+final NumberFormat _currencyNoSymbol = NumberFormat.currency(
+  symbol: '',
+  decimalDigits: 2,
+);
 final NumberFormat _group2 = NumberFormat.decimalPattern();
 
 String formatTwoDecimalsGrouped(num? value) {

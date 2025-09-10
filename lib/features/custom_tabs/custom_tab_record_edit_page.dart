@@ -18,6 +18,7 @@ import '../../services/shared_account_repository.dart';
 class CustomTabRecordEditPage extends StatefulWidget {
   final String accountId;
   final String tabId;
+
   /// Existing record map (if editing) otherwise a seed map for new.
   final Map<String, dynamic> record;
   final SharedAccountRepository? repo; // optional repo to persist directly
@@ -31,7 +32,8 @@ class CustomTabRecordEditPage extends StatefulWidget {
   });
 
   @override
-  State<CustomTabRecordEditPage> createState() => _CustomTabRecordEditPageState();
+  State<CustomTabRecordEditPage> createState() =>
+      _CustomTabRecordEditPageState();
 }
 
 class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
@@ -50,9 +52,17 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
   @override
   void initState() {
     super.initState();
-    _titleCtrl = TextEditingController(text: widget.record['Title']?.toString() ?? '');
-    final num? existingAmtNum = widget.record['Amount'] is num ? widget.record['Amount'] as num : null;
-    _amountCtrl = TextEditingController(text: existingAmtNum != null && existingAmtNum > 0 ? NumberFormat.decimalPattern().format(existingAmtNum) : '');
+    _titleCtrl = TextEditingController(
+      text: widget.record['Title']?.toString() ?? '',
+    );
+    final num? existingAmtNum = widget.record['Amount'] is num
+        ? widget.record['Amount'] as num
+        : null;
+    _amountCtrl = TextEditingController(
+      text: existingAmtNum != null && existingAmtNum > 0
+          ? NumberFormat.decimalPattern().format(existingAmtNum)
+          : '',
+    );
     final rawDate = widget.record['Date']?.toString() ?? '';
     if (rawDate.trim().isEmpty) {
       final now = DateTime.now();
@@ -60,7 +70,9 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
     } else {
       _dateCtrl = TextEditingController(text: rawDate);
     }
-    _noteCtrl = TextEditingController(text: widget.record['Note']?.toString() ?? '');
+    _noteCtrl = TextEditingController(
+      text: widget.record['Note']?.toString() ?? '',
+    );
     _receiptUid = widget.record['ReceiptUid']?.toString();
     if (_receiptUid != null && _receiptUid!.isNotEmpty) {
       _tryLoadLocalReceipt();
@@ -87,7 +99,8 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
     }
   }
 
-  String _fmtDate(DateTime dt) => "${dt.year}-${dt.month.toString().padLeft(2,'0')}-${dt.day.toString().padLeft(2,'0')} ${dt.hour.toString().padLeft(2,'0')}:${dt.minute.toString().padLeft(2,'0')}";
+  String _fmtDate(DateTime dt) =>
+      "${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
 
   @override
   void dispose() {
@@ -108,7 +121,13 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
       lastDate: DateTime(2100),
     );
     if (picked != null) {
-      final dt = DateTime(picked.year, picked.month, picked.day, current.hour, current.minute);
+      final dt = DateTime(
+        picked.year,
+        picked.month,
+        picked.day,
+        current.hour,
+        current.minute,
+      );
       _dateCtrl.text = _fmtDate(dt);
       setState(() {});
     }
@@ -121,7 +140,13 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
       initialTime: TimeOfDay.fromDateTime(current),
     );
     if (t != null) {
-      final dt = DateTime(current.year, current.month, current.day, t.hour, t.minute);
+      final dt = DateTime(
+        current.year,
+        current.month,
+        current.day,
+        t.hour,
+        t.minute,
+      );
       _dateCtrl.text = _fmtDate(dt);
       setState(() {});
     }
@@ -140,13 +165,22 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
       context: context,
       initialTime: TimeOfDay.fromDateTime(current),
     );
-    final dt = DateTime(pickedDate.year, pickedDate.month, pickedDate.day, pickedTime?.hour ?? current.hour, pickedTime?.minute ?? current.minute);
+    final dt = DateTime(
+      pickedDate.year,
+      pickedDate.month,
+      pickedDate.day,
+      pickedTime?.hour ?? current.hour,
+      pickedTime?.minute ?? current.minute,
+    );
     _dateCtrl.text = _fmtDate(dt);
     setState(() {});
   }
 
   Future<void> _pickImage(ImageSource source) async {
-    final pickedFile = await ImagePicker().pickImage(source: source, imageQuality: 85);
+    final pickedFile = await ImagePicker().pickImage(
+      source: source,
+      imageQuality: 85,
+    );
     if (pickedFile == null) return;
     final raw = await pickedFile.readAsBytes();
     Uint8List bytes = raw;
@@ -160,7 +194,7 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
         if (w > maxDim || h > maxDim) {
           final scale = w >= h ? maxDim / w : maxDim / h;
           final newW = (w * scale).round();
-            final newH = (h * scale).round();
+          final newH = (h * scale).round();
           finalImg = img.copyResize(normalized, width: newW, height: newH);
         }
         bytes = Uint8List.fromList(img.encodeJpg(finalImg, quality: 85));
@@ -175,7 +209,9 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -185,12 +221,18 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
               ListTile(
                 leading: const Icon(Icons.photo_library_outlined),
                 title: const Text('Pick from Gallery'),
-                onTap: () { Navigator.pop(ctx); _pickImage(ImageSource.gallery); },
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImage(ImageSource.gallery);
+                },
               ),
               ListTile(
                 leading: const Icon(Icons.photo_camera_outlined),
                 title: const Text('Take a Photo'),
-                onTap: () { Navigator.pop(ctx); _pickImage(ImageSource.camera); },
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImage(ImageSource.camera);
+                },
               ),
             ],
           ),
@@ -217,7 +259,7 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
       return;
     }
 
-  final out = <String, dynamic>{
+    final out = <String, dynamic>{
       'Title': title,
       'Category': title, // mirror for existing list usage
       'Amount': amountVal,
@@ -227,7 +269,8 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
     };
 
     if (_receipt != null) {
-      final receiptUid = _receiptUid ?? 'r_${DateTime.now().microsecondsSinceEpoch}';
+      final receiptUid =
+          _receiptUid ?? 'r_${DateTime.now().microsecondsSinceEpoch}';
       try {
         await LocalReceiptService().saveReceipt(
           accountId: widget.accountId,
@@ -241,9 +284,10 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
         // If saving fails we still proceed without receipt
       }
     } else {
-        if (widget.record['ReceiptUid'] != null && (widget.record['ReceiptUid'] as String).isNotEmpty) {
-          out['ReceiptRemoved'] = true; // signal cleanup
-        }
+      if (widget.record['ReceiptUid'] != null &&
+          (widget.record['ReceiptUid'] as String).isNotEmpty) {
+        out['ReceiptRemoved'] = true; // signal cleanup
+      }
     }
 
     // If repo provided, write immediately (create or update) then pop with updated data including id
@@ -251,17 +295,24 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
       if (widget.repo != null) {
         // Distinguish create vs update
         if (widget.record['id'] == null) {
-          final newId = await widget.repo!.addCustomTabRecord(widget.tabId, out);
+          final newId = await widget.repo!.addCustomTabRecord(
+            widget.tabId,
+            out,
+          );
           out['id'] = newId;
         } else {
-          await widget.repo!.updateCustomTabRecord(widget.tabId, widget.record['id'] as String, out);
+          await widget.repo!.updateCustomTabRecord(
+            widget.tabId,
+            widget.record['id'] as String,
+            out,
+          );
         }
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to save to cloud: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to save to cloud: $e')));
       }
     }
     if (mounted) Navigator.pop(context, out);
@@ -274,8 +325,14 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
         title: const Text('Delete record?'),
         content: const Text('This will permanently remove the record.'),
         actions: [
-          TextButton(onPressed: () => Navigator.of(d).pop(false), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.of(d).pop(true), child: const Text('Delete', style: TextStyle(color: Colors.red))),
+          TextButton(
+            onPressed: () => Navigator.of(d).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(d).pop(true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
         ],
       ),
     );
@@ -287,7 +344,9 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
           await widget.repo!.deleteCustomTabRecord(widget.tabId, id);
         } catch (e) {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Cloud delete failed: $e')));
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('Cloud delete failed: $e')));
           }
         }
       }
@@ -298,7 +357,9 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
   @override
   Widget build(BuildContext context) {
     final dtParsed = DateTime.tryParse(_dateCtrl.text);
-    final friendlyDate = dtParsed != null ? _humanFmt.format(dtParsed) : _dateCtrl.text;
+    final friendlyDate = dtParsed != null
+        ? _humanFmt.format(dtParsed)
+        : _dateCtrl.text;
     return AppGradientBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
@@ -307,7 +368,9 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
           backgroundColor: Colors.transparent,
           elevation: 0,
           surfaceTintColor: Colors.transparent,
-          title: Text(widget.record['id'] == null ? 'Add Record' : 'Edit Record'),
+          title: Text(
+            widget.record['id'] == null ? 'Add Record' : 'Edit Record',
+          ),
           actions: [
             if (widget.record['id'] != null)
               IconButton(
@@ -315,7 +378,11 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
                 icon: const Icon(Icons.delete_outline),
                 onPressed: _handleDelete,
               ),
-            IconButton(onPressed: _handleSave, tooltip: 'Save', icon: const Icon(Icons.save)),
+            IconButton(
+              onPressed: _handleSave,
+              tooltip: 'Save',
+              icon: const Icon(Icons.save),
+            ),
           ],
         ),
         body: SingleChildScrollView(
@@ -344,7 +411,9 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
                 TextField(
                   controller: _amountCtrl,
                   focusNode: _amountFocus,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
                   inputFormatters: [TwoDecimalInputFormatter()],
                   decoration: const InputDecoration(
                     labelText: 'Amount',
@@ -352,7 +421,9 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
                     border: OutlineInputBorder(),
                   ),
                   onEditingComplete: () => _amountFocus.unfocus(),
-                  onTapOutside: (_) { if (_amountFocus.hasFocus) _amountFocus.unfocus(); },
+                  onTapOutside: (_) {
+                    if (_amountFocus.hasFocus) _amountFocus.unfocus();
+                  },
                 ),
                 Builder(
                   builder: (_) {
@@ -360,7 +431,10 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
                     if (amt <= 0) {
                       return const Padding(
                         padding: EdgeInsets.only(top: 8.0),
-                        child: Text('Amount must be greater than 0', style: TextStyle(color: Colors.red)),
+                        child: Text(
+                          'Amount must be greater than 0',
+                          style: TextStyle(color: Colors.red),
+                        ),
                       );
                     }
                     return const SizedBox.shrink();
@@ -381,15 +455,27 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          IconButton(onPressed: _pickDate, icon: const Icon(Icons.calendar_today_outlined)),
-                          IconButton(onPressed: _pickTime, icon: const Icon(Icons.access_time)),
+                          IconButton(
+                            onPressed: _pickDate,
+                            icon: const Icon(Icons.calendar_today_outlined),
+                          ),
+                          IconButton(
+                            onPressed: _pickTime,
+                            icon: const Icon(Icons.access_time),
+                          ),
                         ],
                       ),
                     ),
                   ),
                 ),
                 const SizedBox(height: 6),
-                Align(alignment: Alignment.centerLeft, child: Text(friendlyDate, style: const TextStyle(color: Colors.grey))),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    friendlyDate,
+                    style: const TextStyle(color: Colors.grey),
+                  ),
+                ),
                 const SizedBox(height: 20),
                 TextField(
                   controller: _noteCtrl,
@@ -401,7 +487,12 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
                 ),
                 const SizedBox(height: 24),
                 if (_loadingExistingReceipt)
-                  const Center(child: Padding(padding: EdgeInsets.all(12), child: CircularProgressIndicator()))
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(12),
+                      child: CircularProgressIndicator(),
+                    ),
+                  )
                 else ...[
                   if (_receipt != null)
                     ClipRRect(
@@ -421,11 +512,16 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
                     ElevatedButton.icon(
                       onPressed: _showImageSourceSheet,
                       icon: const Icon(Icons.attachment_outlined),
-                      label: Text(_receipt == null ? 'Attach Image' : 'Change Image'),
+                      label: Text(
+                        _receipt == null ? 'Attach Image' : 'Change Image',
+                      ),
                     ),
                     if (_receipt != null)
                       OutlinedButton.icon(
-                        onPressed: () => setState(() { _receipt = null; _receiptUid = null; }),
+                        onPressed: () => setState(() {
+                          _receipt = null;
+                          _receiptUid = null;
+                        }),
                         icon: const Icon(Icons.delete_outline),
                         label: const Text('Remove'),
                       ),
@@ -443,11 +539,15 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
             child: ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
                 minimumSize: const Size.fromHeight(56),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
               ),
               onPressed: _handleSave,
               icon: const Icon(Icons.save),
-              label: Text(widget.record['id'] == null ? 'Save Record' : 'Update Record'),
+              label: Text(
+                widget.record['id'] == null ? 'Save Record' : 'Update Record',
+              ),
             ),
           ),
         ),

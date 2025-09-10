@@ -125,6 +125,9 @@ class _SavingsTabState extends State<SavingsTab> {
   // Period helpers
   (DateTime, DateTime) _getPeriodRange(String period) {
     final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    final tomorrowStart = todayStart.add(const Duration(days: 1));
+    final yesterdayStart = todayStart.subtract(const Duration(days: 1));
     final startOfThisWeek = now
         .subtract(Duration(days: now.weekday % 7))
         .copyWith(
@@ -142,6 +145,10 @@ class _SavingsTabState extends State<SavingsTab> {
       const Duration(days: 7),
     );
     switch (period) {
+      case 'today':
+        return (todayStart, tomorrowStart);
+      case 'yesterday':
+        return (yesterdayStart, todayStart);
       case 'this_week':
         return (startOfThisWeek, startOfNextWeek);
       case 'last_week':
@@ -180,6 +187,10 @@ class _SavingsTabState extends State<SavingsTab> {
 
   String _goalPercentKeyForPeriod(String period) {
     switch (period) {
+      case 'today':
+        return 'savingsGoalPercent_today';
+      case 'yesterday':
+        return 'savingsGoalPercent_yesterday';
       case 'this_week':
         return 'savingsGoalPercent_this_week';
       case 'last_week':
@@ -211,6 +222,8 @@ class _SavingsTabState extends State<SavingsTab> {
     final periodExpenses = _sumForPeriod(expensesRows);
     final periodNet = periodSavings - periodExpenses;
     final periodLabel = switch (_period) {
+      'today' => 'Today',
+      'yesterday' => 'Yesterday',
       'this_week' => 'This Week',
       'last_week' => 'Last Week',
       'last_month' => 'Last Month',
@@ -643,6 +656,11 @@ class _SavingsSummaryHeader extends StatelessWidget {
                       tooltip: 'Change period',
                       onSelected: onChangePeriod,
                       itemBuilder: (ctx) => const [
+                        PopupMenuItem(value: 'today', child: Text('Today')),
+                        PopupMenuItem(
+                          value: 'yesterday',
+                          child: Text('Yesterday'),
+                        ),
                         PopupMenuItem(
                           value: 'this_week',
                           child: Text('This Week'),
@@ -1092,12 +1110,7 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
       'Car': ['Down Payment', 'Upgrade'],
       'Personal': ['Gadgets', 'Hobby'],
       // Newly requested Compensation category
-      'Compensation': [
-        'Salary',
-        'Bonus',
-        'Incentive',
-        'Reimbursement',
-      ],
+      'Compensation': ['Salary', 'Bonus', 'Incentive', 'Reimbursement'],
     };
 
     bool changed = false;
@@ -1128,7 +1141,8 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
     selectedCategory = widget.saving['Category'] ?? '';
     selectedSubcategory = widget.saving['Subcategory'] ?? '';
     // If new saving (empty category) default to Compensation
-    if ((selectedCategory == null || selectedCategory!.isEmpty) && categoriesMap.containsKey('Compensation')) {
+    if ((selectedCategory == null || selectedCategory!.isEmpty) &&
+        categoriesMap.containsKey('Compensation')) {
       selectedCategory = 'Compensation';
       selectedSubcategory = null; // force user to pick specific subcategory
     }
@@ -1458,7 +1472,7 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
                         items: () {
                           final keys = categoriesMap.keys.toList();
                           // Move Compensation to top if present
-                          keys.sort((a,b){
+                          keys.sort((a, b) {
                             if (a == 'Compensation') return -1;
                             if (b == 'Compensation') return 1;
                             return a.toLowerCase().compareTo(b.toLowerCase());
@@ -1553,7 +1567,9 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
                   inputFormatters: [TwoDecimalInputFormatter()],
                   onChanged: (_) => setState(() {}),
                   onEditingComplete: () => _amountFocus.unfocus(),
-                  onTapOutside: (_) { if (_amountFocus.hasFocus) _amountFocus.unfocus(); },
+                  onTapOutside: (_) {
+                    if (_amountFocus.hasFocus) _amountFocus.unfocus();
+                  },
                   style: const TextStyle(fontSize: 20),
                   decoration: const InputDecoration(
                     labelText: 'Amount',

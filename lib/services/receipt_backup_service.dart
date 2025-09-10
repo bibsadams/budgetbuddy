@@ -29,7 +29,7 @@ class ReceiptBackupService {
       // ignore if rules missing yet
     }
 
-  final manifest = <String, Map<String, dynamic>>{}; // uid -> meta
+    final manifest = <String, Map<String, dynamic>>{}; // uid -> meta
 
     Future<void> addRow(String collection, Map<String, dynamic> row) async {
       final uid = (row['ReceiptUid'] ?? row['receiptUid'] ?? '').toString();
@@ -53,7 +53,7 @@ class ReceiptBackupService {
         'subcategory': row['Subcategory'],
         'amount': row['Amount'],
         'date': row['Date'],
-            'validUntil': row['ValidUntil'],
+        'validUntil': row['ValidUntil'],
         'note': row['Note'],
       };
     }
@@ -61,8 +61,12 @@ class ReceiptBackupService {
     for (final r in expenses) {
       await addRow('expenses', r);
     }
-  for (final r in savings) { await addRow('savings', r); }
-  for (final r in orRows) { await addRow('or', r); }
+    for (final r in savings) {
+      await addRow('savings', r);
+    }
+    for (final r in orRows) {
+      await addRow('or', r);
+    }
 
     // Custom tabs: iterate tabs and include records
     try {
@@ -120,11 +124,14 @@ class ReceiptBackupService {
       final uid = entry.key;
       final meta = entry.value as Map<String, dynamic>;
       final collection = (meta['collection'] ?? '').toString();
-  final isStd = collection == 'expenses' || collection == 'savings' || collection == 'or';
-  final isCustom = collection.startsWith('custom_');
-  if (!isStd && !isCustom) continue;
+      final isStd =
+          collection == 'expenses' ||
+          collection == 'savings' ||
+          collection == 'or';
+      final isCustom = collection.startsWith('custom_');
+      if (!isStd && !isCustom) continue;
 
-  final file = File('${sourceDir.path}/$collection/$uid.jpg');
+      final file = File('${sourceDir.path}/$collection/$uid.jpg');
       if (!await file.exists()) {
         results.add({'receiptUid': uid, 'status': 'skipped_no_file'});
         continue;

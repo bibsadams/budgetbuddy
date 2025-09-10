@@ -5,7 +5,10 @@ import 'package:flutter/services.dart';
 /// avoid cursor jump issues. Example accepted inputs: "", "0", "12", "12.", "12.3", "12.34".
 class TwoDecimalInputFormatter extends TextInputFormatter {
   @override
-  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
     String text = newValue.text;
     if (text.isEmpty) return newValue.copyWith(text: '');
 
@@ -21,7 +24,8 @@ class TwoDecimalInputFormatter extends TextInputFormatter {
           buf.write('.');
           seenDot = true;
         }
-      } else if (ch.codeUnitAt(0) >= 48 && ch.codeUnitAt(0) <= 57) { // 0-9
+      } else if (ch.codeUnitAt(0) >= 48 && ch.codeUnitAt(0) <= 57) {
+        // 0-9
         buf.write(ch);
       }
     }
@@ -34,15 +38,21 @@ class TwoDecimalInputFormatter extends TextInputFormatter {
       final decRaw = parts.length > 1 ? parts[1] : '';
       final limitedDec = decRaw.length > 2 ? decRaw.substring(0, 2) : decRaw;
       // Normalize leading zeros in int part
-      String intPart = intPartRaw.isEmpty ? '0' : int.tryParse(intPartRaw) == null ? '0' : int.parse(intPartRaw).toString();
+      String intPart = intPartRaw.isEmpty
+          ? '0'
+          : int.tryParse(intPartRaw) == null
+          ? '0'
+          : int.parse(intPartRaw).toString();
       sanitized = limitedDec.isEmpty && text.endsWith('.')
           ? '$intPart.'
           : limitedDec.isEmpty
-              ? intPart
-              : '$intPart.$limitedDec';
+          ? intPart
+          : '$intPart.$limitedDec';
     } else {
       // No decimal point: compress leading zeros
-      sanitized = int.tryParse(sanitized) == null ? '0' : int.parse(sanitized).toString();
+      sanitized = int.tryParse(sanitized) == null
+          ? '0'
+          : int.parse(sanitized).toString();
     }
 
     return TextEditingValue(

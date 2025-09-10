@@ -74,6 +74,9 @@ class _ExpensesTabState extends State<ExpensesTab> {
 
   (DateTime, DateTime) _getPeriodRange(String period) {
     final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    final tomorrowStart = todayStart.add(const Duration(days: 1));
+    final yesterdayStart = todayStart.subtract(const Duration(days: 1));
     // Week starts on Sunday to match prior logic
     final startOfThisWeek = now
         .subtract(Duration(days: now.weekday % 7))
@@ -92,6 +95,10 @@ class _ExpensesTabState extends State<ExpensesTab> {
       const Duration(days: 7),
     );
     switch (period) {
+      case 'today':
+        return (todayStart, tomorrowStart);
+      case 'yesterday':
+        return (yesterdayStart, todayStart);
       case 'this_week':
         return (startOfThisWeek, startOfNextWeek);
       case 'last_week':
@@ -231,6 +238,8 @@ class _ExpensesTabState extends State<ExpensesTab> {
     final rows = widget.rows;
     final total = _sumForPeriod(rows);
     String periodLabel = switch (_period) {
+      'today' => 'Today',
+      'yesterday' => 'Yesterday',
       'this_week' => 'This Week',
       'last_week' => 'Last Week',
       'last_month' => 'Last Month',
@@ -726,6 +735,8 @@ class _SummaryHeader extends StatelessWidget {
                       tooltip: 'Change period',
                       onSelected: onChangePeriod,
                       itemBuilder: (ctx) => [
+                        _periodItem('Today', 'today'),
+                        _periodItem('Yesterday', 'yesterday'),
                         _periodItem('This Week', 'this_week'),
                         _periodItem('This Month', 'this_month'),
                         _periodItem('Last Week', 'last_week'),
@@ -1106,11 +1117,13 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
   @override
   void initState() {
     super.initState();
-    final rawMap = box.get('categories') as Map? ?? {
-      'Grocery': [],
-      'House': ['Electricity Bill', 'Water Bill'],
-      'Car': [],
-    };
+    final rawMap =
+        box.get('categories') as Map? ??
+        {
+          'Grocery': [],
+          'House': ['Electricity Bill', 'Water Bill'],
+          'Car': [],
+        };
 
     categoriesMap = rawMap.map<String, List<String>>((key, value) {
       final list = (value as List).map((e) => e.toString()).toList();
@@ -1131,12 +1144,7 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
       // Extra helpful category
       'Health': ['Medicine', 'Checkup', 'Dental', 'Insurance'],
       // Newly requested Food category with fixed subcategories
-      'Food': [
-        'Restaurant',
-        'Food Stall',
-        'Street Food',
-        'Coffee Shop',
-      ],
+      'Food': ['Restaurant', 'Food Stall', 'Street Food', 'Coffee Shop'],
     };
 
     bool changed = false;
@@ -1167,7 +1175,8 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
     selectedCategory = (widget.expense['Category'] ?? '') as String?;
     selectedSubcategory = (widget.expense['Subcategory'] ?? '') as String?;
     // If creating a brand-new expense (empty category), default to Food
-    if ((selectedCategory == null || selectedCategory!.isEmpty) && categoriesMap.containsKey('Food')) {
+    if ((selectedCategory == null || selectedCategory!.isEmpty) &&
+        categoriesMap.containsKey('Food')) {
       selectedCategory = 'Food';
       // Leave subcategory unselected so user chooses; could also pick first option if desired
       selectedSubcategory = null;
@@ -1201,8 +1210,8 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
 
   @override
   void dispose() {
-  amountController.dispose();
-  _amountFocus.dispose();
+    amountController.dispose();
+    _amountFocus.dispose();
     dateController.dispose();
     noteController.dispose();
     super.dispose();
@@ -1503,7 +1512,9 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                     const SizedBox(width: 12),
                     // Disable add category when Food is selected to keep requested list stable
                     ElevatedButton.icon(
-                      onPressed: selectedCategory == 'Food' ? null : _addNewCategory,
+                      onPressed: selectedCategory == 'Food'
+                          ? null
+                          : _addNewCategory,
                       icon: const Icon(Icons.add),
                       label: const Text("Add Category"),
                     ),
@@ -1546,7 +1557,9 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                       const SizedBox(width: 12),
                       IconButton.filledTonal(
                         tooltip: 'Add subcategory',
-                        onPressed: selectedCategory == 'Food' ? null : _addNewSubcategory,
+                        onPressed: selectedCategory == 'Food'
+                            ? null
+                            : _addNewSubcategory,
                         icon: const Icon(Icons.add),
                       ),
                     ],

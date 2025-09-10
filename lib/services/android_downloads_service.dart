@@ -9,9 +9,9 @@ class AndroidDownloadsService {
     required String fileName,
   }) async {
     try {
-  // Best-effort Android public Downloads directory path
-  // Note: On some devices/versions this may vary. Adjust if needed.
-  final downloadsPath = '/storage/emulated/0/Download';
+      // Best-effort Android public Downloads directory path
+      // Note: On some devices/versions this may vary. Adjust if needed.
+      final downloadsPath = '/storage/emulated/0/Download';
       final targetDir = Directory('$downloadsPath/BudgetBuddy');
       await targetDir.create(recursive: true);
       final outFile = File('${targetDir.path}/$fileName');

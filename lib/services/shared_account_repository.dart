@@ -140,7 +140,7 @@ class SharedAccountRepository {
           tx.update(_accountDoc, {'members': members});
         } else {
           // For non-owners, only allow join if account is joint AND an approval doc exists.
-            final data = accountSnap.data() ?? {};
+          final data = accountSnap.data() ?? {};
           final isJoint = (data['isJoint'] as bool?) ?? false;
           if (!isJoint) {
             // Not a joint account: this Gmail should create/own its own account instead.
@@ -306,6 +306,7 @@ class SharedAccountRepository {
         .snapshots()
         .map((qs) => qs.docs.map((d) => _fromDoc(d)).toList());
   }
+
   Stream<List<Map<String, dynamic>>> orStream() {
     return _orCol
         .orderBy('date', descending: true)
@@ -322,16 +323,22 @@ class SharedAccountRepository {
 
   // Custom Tabs
   Stream<List<Map<String, dynamic>>> customTabsStream() {
-  return _customTabsCol
-    .orderBy('order', descending: false)
-    .snapshots()
-    .map((qs) => qs.docs
-      .where((d) => (d.data()['archived'] != true))
-      .map((d) => _fromCustomTabDoc(d))
-      .toList());
+    return _customTabsCol
+        .orderBy('order', descending: false)
+        .snapshots()
+        .map(
+          (qs) => qs.docs
+              .where((d) => (d.data()['archived'] != true))
+              .map((d) => _fromCustomTabDoc(d))
+              .toList(),
+        );
   }
 
-  Future<String> addCustomTab({required String title, int? order, String? withId}) async {
+  Future<String> addCustomTab({
+    required String title,
+    int? order,
+    String? withId,
+  }) async {
     final data = _toCustomTabDoc({'title': title, 'order': order ?? 0});
     // Enforce maximum number of custom tabs (10) using a counters doc inside meta
     final countersDoc = _accountDoc.collection('meta').doc('counters');
@@ -366,23 +373,17 @@ class SharedAccountRepository {
   }
 
   Future<void> renameCustomTab(String id, String title) async {
-    await _customTabsCol.doc(id).set(
-      {
-        'title': title,
-        'updatedAt': FieldValue.serverTimestamp(),
-      },
-      SetOptions(merge: true),
-    );
+    await _customTabsCol.doc(id).set({
+      'title': title,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   Future<void> setCustomTabOrder(String id, int order) async {
-    await _customTabsCol.doc(id).set(
-      {
-        'order': order,
-        'updatedAt': FieldValue.serverTimestamp(),
-      },
-      SetOptions(merge: true),
-    );
+    await _customTabsCol.doc(id).set({
+      'order': order,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 
   Future<void> deleteCustomTab(String id) async {
@@ -437,13 +438,16 @@ class SharedAccountRepository {
       // ignore silent counter failure
     }
     if (hadPermissionErrors) {
-      throw Exception('Some records could not be removed (permissions) but tab deleted');
+      throw Exception(
+        'Some records could not be removed (permissions) but tab deleted',
+      );
     }
   }
 
   // (additional helper methods)
-  CollectionReference<Map<String, dynamic>> _customTabRecordsCol(String tabId) =>
-      _customTabsCol.doc(tabId).collection('records');
+  CollectionReference<Map<String, dynamic>> _customTabRecordsCol(
+    String tabId,
+  ) => _customTabsCol.doc(tabId).collection('records');
 
   Stream<List<Map<String, dynamic>>> customTabRecordsStream(String tabId) {
     return _customTabRecordsCol(tabId)
@@ -451,27 +455,42 @@ class SharedAccountRepository {
         .snapshots()
         .map((qs) => qs.docs.map((d) => _fromCustomRecordDoc(d)).toList());
   }
+
   Future<List<Map<String, dynamic>>> fetchAllCustomTabsOnce() async {
     final qs = await _customTabsCol.orderBy('order', descending: false).get();
     return qs.docs.map((d) => _fromCustomTabDoc(d)).toList();
   }
 
-  Future<List<Map<String, dynamic>>> fetchAllCustomTabRecordsOnce(String tabId) async {
-    final qs = await _customTabRecordsCol(tabId).orderBy('date', descending: true).get();
+  Future<List<Map<String, dynamic>>> fetchAllCustomTabRecordsOnce(
+    String tabId,
+  ) async {
+    final qs = await _customTabRecordsCol(
+      tabId,
+    ).orderBy('date', descending: true).get();
     return qs.docs.map((d) => _fromCustomRecordDoc(d)).toList();
   }
 
-  Future<String> addCustomTabRecord(String tabId, Map<String, dynamic> item, {String? withId}) async {
+  Future<String> addCustomTabRecord(
+    String tabId,
+    Map<String, dynamic> item, {
+    String? withId,
+  }) async {
     final data = _toCustomRecordDoc(item);
     if (withId != null && withId.isNotEmpty) {
-      await _customTabRecordsCol(tabId).doc(withId).set(data, SetOptions(merge: true));
+      await _customTabRecordsCol(
+        tabId,
+      ).doc(withId).set(data, SetOptions(merge: true));
       return withId;
     }
     final ref = await _customTabRecordsCol(tabId).add(data);
     return ref.id;
   }
 
-  Future<void> updateCustomTabRecord(String tabId, String id, Map<String, dynamic> item) async {
+  Future<void> updateCustomTabRecord(
+    String tabId,
+    String id,
+    Map<String, dynamic> item,
+  ) async {
     // Support receipt removal/ replacement.
     final docRef = _customTabRecordsCol(tabId).doc(id);
     String? oldReceiptUid;
@@ -485,8 +504,13 @@ class SharedAccountRepository {
       }
     } catch (_) {}
 
-    final bool receiptRemoved = item['ReceiptRemoved'] == true && (item['ReceiptUid'] == null || (item['ReceiptUid'] as String).isEmpty);
-    final hasNewReceipt = item['ReceiptUid'] != null && (item['ReceiptUid'] as String).isNotEmpty && item['ReceiptUid'] != oldReceiptUid;
+    final bool receiptRemoved =
+        item['ReceiptRemoved'] == true &&
+        (item['ReceiptUid'] == null || (item['ReceiptUid'] as String).isEmpty);
+    final hasNewReceipt =
+        item['ReceiptUid'] != null &&
+        (item['ReceiptUid'] as String).isNotEmpty &&
+        item['ReceiptUid'] != oldReceiptUid;
 
     final updateData = _toCustomRecordDoc(item);
     // If explicitly removed receipt and there was one before, delete local file & clear firestore fields.
@@ -505,7 +529,10 @@ class SharedAccountRepository {
     }
 
     // If new receipt different from old, optionally cleanup old local file
-    if (hasNewReceipt && oldReceiptUid != null && oldReceiptUid.isNotEmpty && oldReceiptUid != item['ReceiptUid']) {
+    if (hasNewReceipt &&
+        oldReceiptUid != null &&
+        oldReceiptUid.isNotEmpty &&
+        oldReceiptUid != item['ReceiptUid']) {
       try {
         await LocalReceiptService().deleteReceipt(
           accountId: accountId,
@@ -690,9 +717,9 @@ class SharedAccountRepository {
       'Date': (data['date'] is Timestamp)
           ? (data['date'] as Timestamp).toDate().toIso8601String()
           : (data['date']?.toString() ?? ''),
-    'ValidUntil': (data['validUntil'] is Timestamp)
-      ? (data['validUntil'] as Timestamp).toDate().toIso8601String()
-      : (data['validUntil']?.toString() ?? ''),
+      'ValidUntil': (data['validUntil'] is Timestamp)
+          ? (data['validUntil'] as Timestamp).toDate().toIso8601String()
+          : (data['validUntil']?.toString() ?? ''),
       'Note': data['note'],
       // Receipts are large; store as URL in cloud storage ideally.
       'ReceiptUrl': data['receiptUrl'],
@@ -739,7 +766,8 @@ class SharedAccountRepository {
       'subcategory': item['Subcategory'],
       'amount': (item['Amount'] as num?)?.toDouble() ?? 0.0,
       'date': _parseDate(item['Date']),
-      if (item['ValidUntil'] != null && item['ValidUntil'].toString().isNotEmpty)
+      if (item['ValidUntil'] != null &&
+          item['ValidUntil'].toString().isNotEmpty)
         'validUntil': _parseDate(item['ValidUntil']),
       'note': item['Note'],
       'receiptUrl': item['ReceiptUrl'], // files should be uploaded separately
@@ -765,18 +793,18 @@ class SharedAccountRepository {
     };
   }
 
-  Map<String, dynamic> _fromCustomTabDoc(DocumentSnapshot<Map<String, dynamic>> d) {
+  Map<String, dynamic> _fromCustomTabDoc(
+    DocumentSnapshot<Map<String, dynamic>> d,
+  ) {
     final data = d.data() ?? {};
     return {
       'id': d.id,
       'title': data['title']?.toString() ?? 'Tab',
       'order': (data['order'] as num?)?.toInt() ?? 0,
       'createdBy': data['createdBy'],
-    'categories': (data['categories'] is List)
-      ? (data['categories'] as List)
-        .whereType<String>()
-        .toList()
-      : <String>[],
+      'categories': (data['categories'] is List)
+          ? (data['categories'] as List).whereType<String>().toList()
+          : <String>[],
     };
   }
 
@@ -791,35 +819,50 @@ class SharedAccountRepository {
     };
   }
 
-  Future<void> updateCustomTabCategories(String tabId, List<String> categories) async {
+  Future<void> updateCustomTabCategories(
+    String tabId,
+    List<String> categories,
+  ) async {
     await _customTabsCol.doc(tabId).set({
       'categories': categories.take(50).toList(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }
 
-  Map<String, dynamic> _fromCustomRecordDoc(DocumentSnapshot<Map<String, dynamic>> d) {
+  Map<String, dynamic> _fromCustomRecordDoc(
+    DocumentSnapshot<Map<String, dynamic>> d,
+  ) {
     final data = d.data() ?? {};
     return {
       'id': d.id,
       'Title': data['title']?.toString() ?? 'Untitled',
-  'Category': data['category']?.toString() ?? data['title']?.toString() ?? 'Untitled',
+      'Category':
+          data['category']?.toString() ??
+          data['title']?.toString() ??
+          'Untitled',
       'Amount': (data['amount'] as num?)?.toDouble() ?? 0.0,
       'Date': (data['date'] is Timestamp)
           ? (data['date'] as Timestamp).toDate().toIso8601String()
           : (data['date']?.toString() ?? ''),
       'Note': data['note']?.toString() ?? '',
       'CreatedBy': data['createdBy'],
-  'ReceiptUid': data['receiptUid'],
-  'ReceiptUrl': data['receiptUrl'],
+      'ReceiptUid': data['receiptUid'],
+      'ReceiptUrl': data['receiptUrl'],
     };
   }
 
   Map<String, dynamic> _toCustomRecordDoc(Map<String, dynamic> item) {
     return {
       'title': item['Title'] ?? item['title'] ?? 'Untitled',
-  'category': item['Category'] ?? item['category'] ?? item['Title'] ?? item['title'] ?? 'Untitled',
-      'amount': (item['Amount'] as num?)?.toDouble() ?? (double.tryParse(item['amount']?.toString() ?? '') ?? 0.0),
+      'category':
+          item['Category'] ??
+          item['category'] ??
+          item['Title'] ??
+          item['title'] ??
+          'Untitled',
+      'amount':
+          (item['Amount'] as num?)?.toDouble() ??
+          (double.tryParse(item['amount']?.toString() ?? '') ?? 0.0),
       'date': _parseDate(item['Date']),
       'note': item['Note'] ?? item['note'],
       'createdBy': uid,

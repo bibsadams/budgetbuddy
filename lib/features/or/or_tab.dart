@@ -10,7 +10,8 @@ import 'package:budgetbuddy/widgets/pressable_neumorphic.dart';
 
 class OrTab extends StatefulWidget {
   final List<Map<String, dynamic>> rows;
-  final List<Map<String, dynamic>> expensesRows; // kept for parity if needed later
+  final List<Map<String, dynamic>>
+  expensesRows; // kept for parity if needed later
   final void Function(List<Map<String, dynamic>> newRows) onRowsChanged;
 
   const OrTab({
@@ -36,24 +37,33 @@ class _OrTabState extends State<OrTab> {
       if (db == null) return -1;
       return da.compareTo(db);
     }
+
     final copy = List<Map<String, dynamic>>.from(list);
     switch (_sort) {
       case 'Amount (high → low)':
-        copy.sort((a, b) => ((b['Amount'] ?? 0) as num)
-            .compareTo((a['Amount'] ?? 0) as num));
+        copy.sort(
+          (a, b) =>
+              ((b['Amount'] ?? 0) as num).compareTo((a['Amount'] ?? 0) as num),
+        );
         break;
       case 'Amount (low → high)':
-        copy.sort((a, b) => ((a['Amount'] ?? 0) as num)
-            .compareTo((b['Amount'] ?? 0) as num));
+        copy.sort(
+          (a, b) =>
+              ((a['Amount'] ?? 0) as num).compareTo((b['Amount'] ?? 0) as num),
+        );
         break;
       case 'Date (oldest)':
-        copy.sort((a, b) => cmpDate((a['Date'] ?? '') as String,
-            (b['Date'] ?? '') as String));
+        copy.sort(
+          (a, b) =>
+              cmpDate((a['Date'] ?? '') as String, (b['Date'] ?? '') as String),
+        );
         break;
       case 'Date (newest)':
       default:
-        copy.sort((a, b) => cmpDate((b['Date'] ?? '') as String,
-            (a['Date'] ?? '') as String));
+        copy.sort(
+          (a, b) =>
+              cmpDate((b['Date'] ?? '') as String, (a['Date'] ?? '') as String),
+        );
     }
     return copy;
   }
@@ -62,15 +72,18 @@ class _OrTabState extends State<OrTab> {
     final res = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
-        builder: (_) => OrEditPage(record: {
-          'id': '',
-          'Category': '', // store Name in Category field for reuse of persistence
-          'Amount': 0.0,
-          'Date': '',
-          'ValidUntil': '',
-          'Note': '',
-          'Receipt': null,
-        }),
+        builder: (_) => OrEditPage(
+          record: {
+            'id': '',
+            'Category':
+                '', // store Name in Category field for reuse of persistence
+            'Amount': 0.0,
+            'Date': '',
+            'ValidUntil': '',
+            'Note': '',
+            'Receipt': null,
+          },
+        ),
       ),
     );
     if (res != null) {
@@ -102,11 +115,13 @@ class _OrTabState extends State<OrTab> {
         removeIndex = current.indexWhere((r) => (r['id'] ?? '') == delId);
       }
       if (removeIndex < 0) {
-        removeIndex = current.indexWhere((r) =>
-            r['Category'] == row['Category'] &&
-            r['Amount'] == row['Amount'] &&
-            r['Date'] == row['Date'] &&
-            r['Note'] == row['Note']);
+        removeIndex = current.indexWhere(
+          (r) =>
+              r['Category'] == row['Category'] &&
+              r['Amount'] == row['Amount'] &&
+              r['Date'] == row['Date'] &&
+              r['Note'] == row['Note'],
+        );
       }
       if (removeIndex >= 0) {
         current.removeAt(removeIndex);
@@ -121,11 +136,13 @@ class _OrTabState extends State<OrTab> {
       targetIndex = current.indexWhere((r) => (r['id'] ?? '') == existingId);
     }
     if (targetIndex < 0) {
-      targetIndex = current.indexWhere((r) =>
-          r['Category'] == row['Category'] &&
-          r['Amount'] == row['Amount'] &&
-          r['Date'] == row['Date'] &&
-          r['Note'] == row['Note']);
+      targetIndex = current.indexWhere(
+        (r) =>
+            r['Category'] == row['Category'] &&
+            r['Amount'] == row['Amount'] &&
+            r['Date'] == row['Date'] &&
+            r['Note'] == row['Note'],
+      );
     }
     if (targetIndex < 0) targetIndex = index;
 
@@ -209,13 +226,17 @@ class _OrTabState extends State<OrTab> {
                 itemCount: rows.length,
                 itemBuilder: (context, index) {
                   final row = rows[index];
-                  final amount = currency
-                      .format(((row['Amount'] ?? 0) as num).toDouble());
+                  final amount = currency.format(
+                    ((row['Amount'] ?? 0) as num).toDouble(),
+                  );
                   return Dismissible(
                     key: ValueKey(row['id'] ?? index),
                     direction: DismissDirection.endToStart,
                     background: Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      margin: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.red,
                         borderRadius: BorderRadius.circular(16),
@@ -229,27 +250,46 @@ class _OrTabState extends State<OrTab> {
                             context: context,
                             builder: (_) => AlertDialog(
                               title: const Text('Delete OR'),
-                              content: const Text('Are you sure you want to delete this record?'),
+                              content: const Text(
+                                'Are you sure you want to delete this record?',
+                              ),
                               actions: [
-                                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                                TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete', style: TextStyle(color: Colors.red))),
+                                TextButton(
+                                  onPressed: () =>
+                                      Navigator.pop(context, false),
+                                  child: const Text('Cancel'),
+                                ),
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context, true),
+                                  child: const Text(
+                                    'Delete',
+                                    style: TextStyle(color: Colors.red),
+                                  ),
+                                ),
                               ],
                             ),
-                          ) ?? false;
+                          ) ??
+                          false;
                     },
                     onDismissed: (_) {
-                      final original = List<Map<String, dynamic>>.from(widget.rows);
+                      final original = List<Map<String, dynamic>>.from(
+                        widget.rows,
+                      );
                       final id = (row['id'] ?? '').toString();
                       int removeIndex = -1;
                       if (id.isNotEmpty) {
-                        removeIndex = original.indexWhere((r) => (r['id'] ?? '') == id);
+                        removeIndex = original.indexWhere(
+                          (r) => (r['id'] ?? '') == id,
+                        );
                       }
                       if (removeIndex < 0) {
-                        removeIndex = original.indexWhere((r) =>
-                            r['Category'] == row['Category'] &&
-                            r['Amount'] == row['Amount'] &&
-                            r['Date'] == row['Date'] &&
-                            r['Note'] == row['Note']);
+                        removeIndex = original.indexWhere(
+                          (r) =>
+                              r['Category'] == row['Category'] &&
+                              r['Amount'] == row['Amount'] &&
+                              r['Date'] == row['Date'] &&
+                              r['Note'] == row['Note'],
+                        );
                       }
                       if (removeIndex >= 0) {
                         original.removeAt(removeIndex);
@@ -257,7 +297,10 @@ class _OrTabState extends State<OrTab> {
                       }
                     },
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
                       child: PressableNeumorphic(
                         borderRadius: 16,
                         padding: const EdgeInsets.all(16),
@@ -269,7 +312,9 @@ class _OrTabState extends State<OrTab> {
                               width: 44,
                               height: 44,
                               decoration: BoxDecoration(
-                                color: Theme.of(context).colorScheme.primaryContainer,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.primaryContainer,
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: const Icon(Icons.receipt_long_outlined),
@@ -281,7 +326,10 @@ class _OrTabState extends State<OrTab> {
                                 children: [
                                   Text(
                                     (row['Category'] ?? 'No Name').toString(),
-                                    style: Theme.of(context).textTheme.titleMedium!.copyWith(fontWeight: FontWeight.w700,),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium!
+                                        .copyWith(fontWeight: FontWeight.w700),
                                     overflow: TextOverflow.ellipsis,
                                     maxLines: 1,
                                   ),
@@ -290,8 +338,13 @@ class _OrTabState extends State<OrTab> {
                                     children: [
                                       Text(
                                         amount,
-                                        style: Theme.of(context).textTheme.bodyLarge!.copyWith(
-                                              color: Theme.of(context).colorScheme.primary,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodyLarge!
+                                            .copyWith(
+                                              color: Theme.of(
+                                                context,
+                                              ).colorScheme.primary,
                                               fontWeight: FontWeight.w700,
                                             ),
                                       ),
@@ -299,7 +352,9 @@ class _OrTabState extends State<OrTab> {
                                       Expanded(
                                         child: Text(
                                           (row['Note'] ?? '').toString(),
-                                          style: Theme.of(context).textTheme.bodyMedium,
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.bodyMedium,
                                           overflow: TextOverflow.ellipsis,
                                           maxLines: 1,
                                         ),
@@ -309,7 +364,10 @@ class _OrTabState extends State<OrTab> {
                                   const SizedBox(height: 2),
                                   Text(
                                     (row['Date'] ?? '').toString(),
-                                    style: Theme.of(context).textTheme.bodySmall!.copyWith(color: Colors.grey),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall!
+                                        .copyWith(color: Colors.grey),
                                     overflow: TextOverflow.ellipsis,
                                     maxLines: 1,
                                   ),
@@ -366,14 +424,17 @@ class _OrEditPageState extends State<OrEditPage> {
   @override
   void initState() {
     super.initState();
-    nameController = TextEditingController(text: widget.record['Category'] ?? '');
+    nameController = TextEditingController(
+      text: widget.record['Category'] ?? '',
+    );
     String amtText = '';
     final amt = widget.record['Amount'];
     if (amt is num && amt > 0) amtText = _decimalFmt.format(amt);
     amountController = TextEditingController(text: amtText);
     dateController = TextEditingController(text: widget.record['Date'] ?? '');
-    validUntilController =
-        TextEditingController(text: widget.record['ValidUntil'] ?? '');
+    validUntilController = TextEditingController(
+      text: widget.record['ValidUntil'] ?? '',
+    );
     noteController = TextEditingController(text: widget.record['Note'] ?? '');
     receipt = widget.record['Receipt'];
     final lp = (widget.record['LocalReceiptPath'] ?? '') as String;
@@ -519,16 +580,16 @@ class _OrEditPageState extends State<OrEditPage> {
         extendBodyBehindAppBar: true,
         appBar: AppBar(
           backgroundColor: Colors.transparent,
-            elevation: 0,
-            surfaceTintColor: Colors.transparent,
-            title: Text(widget.record['Category'] == '' ? 'Add OR' : 'Edit OR'),
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.save),
-                tooltip: 'Save',
-                onPressed: _handleSave,
-              ),
-            ],
+          elevation: 0,
+          surfaceTintColor: Colors.transparent,
+          title: Text(widget.record['Category'] == '' ? 'Add OR' : 'Edit OR'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.save),
+              tooltip: 'Save',
+              onPressed: _handleSave,
+            ),
+          ],
         ),
         body: SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(
@@ -554,24 +615,35 @@ class _OrEditPageState extends State<OrEditPage> {
                 const SizedBox(height: 20),
                 TextField(
                   controller: amountController,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
                   focusNode: _amountFocus,
                   inputFormatters: [TwoDecimalInputFormatter()],
                   onChanged: (_) => setState(() {}),
                   onEditingComplete: () => _amountFocus.unfocus(),
-                  onTapOutside: (_) { if (_amountFocus.hasFocus) _amountFocus.unfocus(); },
+                  onTapOutside: (_) {
+                    if (_amountFocus.hasFocus) _amountFocus.unfocus();
+                  },
                   decoration: const InputDecoration(
                     labelText: 'Amount',
                     prefixText: '₱ ',
                     border: OutlineInputBorder(),
                   ),
                 ),
-                if ((double.tryParse(amountController.text.replaceAll(',', '')) ?? 0) <= 0)
+                if ((double.tryParse(
+                          amountController.text.replaceAll(',', ''),
+                        ) ??
+                        0) <=
+                    0)
                   const Padding(
                     padding: EdgeInsets.only(top: 8.0),
                     child: Align(
                       alignment: Alignment.centerLeft,
-                      child: Text('Amount must be greater than 0', style: TextStyle(color: Colors.red)),
+                      child: Text(
+                        'Amount must be greater than 0',
+                        style: TextStyle(color: Colors.red),
+                      ),
                     ),
                   ),
                 const SizedBox(height: 20),
@@ -586,16 +658,21 @@ class _OrEditPageState extends State<OrEditPage> {
                   ),
                 ),
                 const SizedBox(height: 6),
-                Builder(builder: (_) {
-                  final dt = DateTime.tryParse(dateController.text);
-                  final friendly = dt != null
-                      ? DateFormat('MMM d, y h:mm a').format(dt)
-                      : dateController.text;
-                  return Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(friendly, style: const TextStyle(color: Colors.grey)),
-                  );
-                }),
+                Builder(
+                  builder: (_) {
+                    final dt = DateTime.tryParse(dateController.text);
+                    final friendly = dt != null
+                        ? DateFormat('MMM d, y h:mm a').format(dt)
+                        : dateController.text;
+                    return Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        friendly,
+                        style: const TextStyle(color: Colors.grey),
+                      ),
+                    );
+                  },
+                ),
                 const SizedBox(height: 20),
                 // New Valid Until (same style as Date Purchase)
                 TextField(
@@ -609,16 +686,21 @@ class _OrEditPageState extends State<OrEditPage> {
                   ),
                 ),
                 const SizedBox(height: 6),
-                Builder(builder: (_) {
-                  final dt = DateTime.tryParse(validUntilController.text);
-                  final friendly = dt != null
-                      ? DateFormat('MMM d, y h:mm a').format(dt)
-                      : validUntilController.text;
-                  return Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(friendly, style: const TextStyle(color: Colors.grey)),
-                  );
-                }),
+                Builder(
+                  builder: (_) {
+                    final dt = DateTime.tryParse(validUntilController.text);
+                    final friendly = dt != null
+                        ? DateFormat('MMM d, y h:mm a').format(dt)
+                        : validUntilController.text;
+                    return Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        friendly,
+                        style: const TextStyle(color: Colors.grey),
+                      ),
+                    );
+                  },
+                ),
                 const SizedBox(height: 20),
                 TextField(
                   controller: noteController,
@@ -629,33 +711,38 @@ class _OrEditPageState extends State<OrEditPage> {
                   ),
                 ),
                 const SizedBox(height: 24),
-                Builder(builder: (ctx) {
-                  Widget? imgWidget;
-                  if (receipt != null) {
-                    imgWidget = Image.memory(
-                      receipt!,
-                      width: MediaQuery.of(context).size.width * 0.9,
-                      height: MediaQuery.of(context).size.height * 0.4,
-                      fit: BoxFit.cover,
+                Builder(
+                  builder: (ctx) {
+                    Widget? imgWidget;
+                    if (receipt != null) {
+                      imgWidget = Image.memory(
+                        receipt!,
+                        width: MediaQuery.of(context).size.width * 0.9,
+                        height: MediaQuery.of(context).size.height * 0.4,
+                        fit: BoxFit.cover,
+                      );
+                    } else if ((localPath ?? '').isNotEmpty) {
+                      imgWidget = Image.file(
+                        File(localPath!),
+                        width: MediaQuery.of(context).size.width * 0.9,
+                        height: MediaQuery.of(context).size.height * 0.4,
+                        fit: BoxFit.cover,
+                      );
+                    } else if ((receiptUrl ?? '').isNotEmpty) {
+                      imgWidget = Image.network(
+                        receiptUrl!,
+                        width: MediaQuery.of(context).size.width * 0.9,
+                        height: MediaQuery.of(context).size.height * 0.4,
+                        fit: BoxFit.cover,
+                      );
+                    }
+                    if (imgWidget == null) return const SizedBox.shrink();
+                    return ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: imgWidget,
                     );
-                  } else if ((localPath ?? '').isNotEmpty) {
-                    imgWidget = Image.file(
-                      File(localPath!),
-                      width: MediaQuery.of(context).size.width * 0.9,
-                      height: MediaQuery.of(context).size.height * 0.4,
-                      fit: BoxFit.cover,
-                    );
-                  } else if ((receiptUrl ?? '').isNotEmpty) {
-                    imgWidget = Image.network(
-                      receiptUrl!,
-                      width: MediaQuery.of(context).size.width * 0.9,
-                      height: MediaQuery.of(context).size.height * 0.4,
-                      fit: BoxFit.cover,
-                    );
-                  }
-                  if (imgWidget == null) return const SizedBox.shrink();
-                  return ClipRRect(borderRadius: BorderRadius.circular(12), child: imgWidget);
-                }),
+                  },
+                ),
                 Wrap(
                   spacing: 12,
                   runSpacing: 8,
@@ -663,11 +750,17 @@ class _OrEditPageState extends State<OrEditPage> {
                     ElevatedButton.icon(
                       onPressed: _showImageSourceSheet,
                       icon: const Icon(Icons.attachment_outlined),
-                      label: Text((receipt == null && (localPath ?? '').isEmpty && (receiptUrl ?? '').isEmpty)
-                          ? 'Attach Image'
-                          : 'Change Image'),
+                      label: Text(
+                        (receipt == null &&
+                                (localPath ?? '').isEmpty &&
+                                (receiptUrl ?? '').isEmpty)
+                            ? 'Attach Image'
+                            : 'Change Image',
+                      ),
                     ),
-                    if (receipt != null || (localPath ?? '').isNotEmpty || (receiptUrl ?? '').isNotEmpty)
+                    if (receipt != null ||
+                        (localPath ?? '').isNotEmpty ||
+                        (receiptUrl ?? '').isNotEmpty)
                       OutlinedButton.icon(
                         onPressed: () => setState(() {
                           receipt = null;
@@ -692,7 +785,9 @@ class _OrEditPageState extends State<OrEditPage> {
                   child: OutlinedButton.icon(
                     style: OutlinedButton.styleFrom(
                       minimumSize: const Size.fromHeight(56),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
                       foregroundColor: Colors.red,
                     ),
                     icon: const Icon(Icons.delete_outline),
@@ -702,25 +797,42 @@ class _OrEditPageState extends State<OrEditPage> {
                         context: context,
                         builder: (_) => AlertDialog(
                           title: const Text('Delete OR'),
-                          content: const Text('Are you sure you want to delete this record?'),
+                          content: const Text(
+                            'Are you sure you want to delete this record?',
+                          ),
                           actions: [
-                            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                            TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete', style: TextStyle(color: Colors.red))),
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, false),
+                              child: const Text('Cancel'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              child: const Text(
+                                'Delete',
+                                style: TextStyle(color: Colors.red),
+                              ),
+                            ),
                           ],
                         ),
                       );
                       if (confirm == true) {
-                        Navigator.pop(context, {'__delete': true, 'id': widget.record['id']});
+                        Navigator.pop(context, {
+                          '__delete': true,
+                          'id': widget.record['id'],
+                        });
                       }
                     },
                   ),
                 ),
-              if ((widget.record['id'] ?? '').toString().isNotEmpty) const SizedBox(width: 12),
+              if ((widget.record['id'] ?? '').toString().isNotEmpty)
+                const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
                     minimumSize: const Size.fromHeight(56),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
                   ),
                   onPressed: _handleSave,
                   icon: const Icon(Icons.save),
@@ -771,15 +883,15 @@ Widget _orReceiptThumb(Map<String, dynamic> row) {
 }
 
 Widget _brokenThumb() => Container(
-      width: 64,
-      height: 64,
-      color: Colors.grey[200],
-      child: const Icon(Icons.broken_image, size: 28),
-    );
+  width: 64,
+  height: 64,
+  color: Colors.grey[200],
+  child: const Icon(Icons.broken_image, size: 28),
+);
 Widget _placeholderThumb() => Container(
-      width: 64,
-      height: 64,
-      color: Colors.grey[200],
-      child: const Icon(Icons.receipt_long, size: 28),
-    );
+  width: 64,
+  height: 64,
+  color: Colors.grey[200],
+  child: const Icon(Icons.receipt_long, size: 28),
+);
 // End of OR tab implementation

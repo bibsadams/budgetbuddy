@@ -336,10 +336,12 @@ class _MainTabsPageState extends State<MainTabsPage> {
       _customTabs = rawCustomTabs
           .whereType<Map>()
           .map((m) => m.map((k, v) => MapEntry(k.toString(), v.toString())))
-          .map<Map<String, String>>((m) => {
-                'id': (m['id'] ?? '').toString(),
-                'title': (m['title'] ?? 'New Tab').toString(),
-              })
+          .map<Map<String, String>>(
+            (m) => {
+              'id': (m['id'] ?? '').toString(),
+              'title': (m['title'] ?? 'New Tab').toString(),
+            },
+          )
           .where((m) => (m['id'] ?? '').isNotEmpty)
           .toList();
     } else {
@@ -381,8 +383,8 @@ class _MainTabsPageState extends State<MainTabsPage> {
       'offline_bills_${widget.accountId}',
       tableData['Bills'] ?? <Map<String, dynamic>>[],
     );
-  // Persist Custom Tabs list per account
-  box.put('customTabs_${widget.accountId}', _customTabs);
+    // Persist Custom Tabs list per account
+    box.put('customTabs_${widget.accountId}', _customTabs);
   }
 
   void _initShared() {
@@ -430,22 +432,27 @@ class _MainTabsPageState extends State<MainTabsPage> {
 
     // Start custom tabs sync (fallback to cached if stream fails)
     _customTabsSub?.cancel();
-    _customTabsSub = _repo!.customTabsStream().listen((rows) {
-      final tabs = rows
-          .map((r) => {
+    _customTabsSub = _repo!.customTabsStream().listen(
+      (rows) {
+        final tabs = rows
+            .map(
+              (r) => {
                 'id': (r['id'] ?? '').toString(),
                 'title': (r['title'] ?? 'Tab').toString(),
-              })
-          .where((m) => (m['id'] ?? '').isNotEmpty)
-          .toList();
-      setState(() {
-        _customTabs = tabs;
-        _ensureCustomScrolls();
-      });
-      box.put('customTabs_${widget.accountId}', tabs);
-    }, onError: (_) {
-      // keep local cache if stream errors
-    });
+              },
+            )
+            .where((m) => (m['id'] ?? '').isNotEmpty)
+            .toList();
+        setState(() {
+          _customTabs = tabs;
+          _ensureCustomScrolls();
+        });
+        box.put('customTabs_${widget.accountId}', tabs);
+      },
+      onError: (_) {
+        // keep local cache if stream errors
+      },
+    );
 
     // use class method _refreshLinkedAccountsCache()
 
@@ -965,17 +972,17 @@ class _MainTabsPageState extends State<MainTabsPage> {
         icon: Icon(Icons.receipt_long_outlined),
         selectedIcon: Icon(Icons.receipt_long),
         label: 'Bills',
-  ),
+      ),
       NavigationDestination(
         icon: Icon(Icons.account_balance_wallet_outlined),
         selectedIcon: Icon(Icons.account_balance_wallet),
         label: 'OR',
-  ),
+      ),
       NavigationDestination(
         icon: Icon(Icons.pie_chart_outline),
         selectedIcon: Icon(Icons.pie_chart),
         label: 'Report',
-  ),
+      ),
     ];
     final customDestinations = <NavigationDestination>[
       for (final t in _customTabs)
@@ -1281,13 +1288,13 @@ class _MainTabsPageState extends State<MainTabsPage> {
             ],
           ),
         ),
-  ListTile(
+        ListTile(
           leading: const Icon(Icons.swap_horiz),
           title: const Text('Switch account'),
           subtitle: const Text('Change the active account'),
           onTap: () => _showAccountSwitcher(context),
         ),
-  ListTile(
+        ListTile(
           leading: const Icon(Icons.manage_accounts_outlined),
           title: const Text('Manage accounts'),
           subtitle: const Text('Rename, remove, or reorder linked accounts'),
@@ -1318,7 +1325,10 @@ class _MainTabsPageState extends State<MainTabsPage> {
         const Divider(height: 1),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: Text('Custom tabs', style: Theme.of(context).textTheme.titleMedium),
+          child: Text(
+            'Custom tabs',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
         ),
         ListTile(
           leading: const Icon(Icons.add_to_photos_outlined),
@@ -1351,11 +1361,15 @@ class _MainTabsPageState extends State<MainTabsPage> {
                     ),
                   ],
                 ),
-              ));
+              ),
+            );
             if (name.isEmpty) name = 'New Tab';
             try {
               if (_repo == null) return;
-              final id = await _repo!.addCustomTab(title: name, order: _customTabs.length);
+              final id = await _repo!.addCustomTab(
+                title: name,
+                order: _customTabs.length,
+              );
               if (!mounted) return;
               // Navigate once the stream pushes new list; optimistic fallback after short delay
               Future.delayed(const Duration(milliseconds: 300), () {
@@ -1373,166 +1387,210 @@ class _MainTabsPageState extends State<MainTabsPage> {
               final msg = e.toString().contains('Maximum custom tabs')
                   ? 'Limit reached (10 custom tabs max)'
                   : 'Failed to create tab';
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(msg)),
-              );
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text(msg)));
             }
           },
         ),
-        if (_customTabs.isNotEmpty)
-          ...[
-            for (int i = 0; i < _customTabs.length; i++)
-              ListTile(
-                leading: const Icon(Icons.tab),
-                title: Text(_customTabs[i]['title'] ?? 'Tab'),
-                // Removed ID and creator details per request
-                subtitle: null,
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      tooltip: 'Rename',
-                      icon: const Icon(Icons.edit_outlined),
-                      onPressed: () async {
-                        String newName = _customTabs[i]['title'] ?? 'Tab';
-                        final ok = await showDialog<bool>(
-                          context: context,
-                          builder: (d) => AlertDialog(
-                            title: const Text('Rename Tab'),
-                            content: TextField(
-                              controller: TextEditingController(text: newName),
-                              onChanged: (v) => newName = v.trim(),
-                              decoration: const InputDecoration(
-                                labelText: 'Tab name',
-                              ),
+        if (_customTabs.isNotEmpty) ...[
+          for (int i = 0; i < _customTabs.length; i++)
+            ListTile(
+              leading: const Icon(Icons.tab),
+              title: Text(_customTabs[i]['title'] ?? 'Tab'),
+              // Removed ID and creator details per request
+              subtitle: null,
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'Rename',
+                    icon: const Icon(Icons.edit_outlined),
+                    onPressed: () async {
+                      String newName = _customTabs[i]['title'] ?? 'Tab';
+                      final ok = await showDialog<bool>(
+                        context: context,
+                        builder: (d) => AlertDialog(
+                          title: const Text('Rename Tab'),
+                          content: TextField(
+                            controller: TextEditingController(text: newName),
+                            onChanged: (v) => newName = v.trim(),
+                            decoration: const InputDecoration(
+                              labelText: 'Tab name',
                             ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.of(d).pop(false),
-                                child: const Text('Cancel'),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.of(d).pop(true),
-                                child: const Text('Save'),
-                              ),
-                            ],
                           ),
-                        );
-                        if (ok == true) {
-                          try {
-                            if (_repo == null) return;
-                            await _repo!.renameCustomTab(
-                              _customTabs[i]['id']!,
-                              newName.isEmpty ? 'Tab' : newName,
-                            );
-                          } catch (e) {
-                            if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Failed to rename: $e')),
-                            );
-                          }
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(d).pop(false),
+                              child: const Text('Cancel'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.of(d).pop(true),
+                              child: const Text('Save'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (ok == true) {
+                        try {
+                          if (_repo == null) return;
+                          await _repo!.renameCustomTab(
+                            _customTabs[i]['id']!,
+                            newName.isEmpty ? 'Tab' : newName,
+                          );
+                        } catch (e) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Failed to rename: $e')),
+                          );
                         }
-                      },
+                      }
+                    },
+                  ),
+                  IconButton(
+                    tooltip: 'Remove',
+                    icon: const Icon(
+                      Icons.delete_outline,
+                      color: Colors.redAccent,
                     ),
-                    IconButton(
-                      tooltip: 'Remove',
-                      icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                      onPressed: () async {
-                        final ok = await showDialog<bool>(
-                          context: context,
-                          builder: (d) => AlertDialog(
-                            title: const Text('Remove Tab'),
-                            content: Text('Remove "${_customTabs[i]['title']}"? Records will be removed from cloud.'),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.of(d).pop(false),
-                                child: const Text('Cancel'),
-                              ),
-                              TextButton(
-                                onPressed: () => Navigator.of(d).pop(true),
-                                child: const Text('Remove'),
-                              ),
-                            ],
+                    onPressed: () async {
+                      final ok = await showDialog<bool>(
+                        context: context,
+                        builder: (d) => AlertDialog(
+                          title: const Text('Remove Tab'),
+                          content: Text(
+                            'Remove "${_customTabs[i]['title']}"? Records will be removed from cloud.',
                           ),
-                        );
-                        if (ok == true) {
-                          try {
-                            if (_repo == null) return;
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(d).pop(false),
+                              child: const Text('Cancel'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.of(d).pop(true),
+                              child: const Text('Remove'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (ok == true) {
+                        try {
+                          if (_repo == null) return;
+                          final removingId = _customTabs[i]['id']!;
+                          await _repo!.deleteCustomTab(removingId);
+                        } catch (e, st) {
+                          if (!mounted) return;
+                          debugPrint('Tab delete error: $e\n$st');
+                          final es = e.toString();
+                          final msg = es.contains('PERMISSION_DENIED')
+                              ? 'Permission denied deleting tab.'
+                              : 'Failed to remove tab';
+                          final detail = es.length > 160
+                              ? es.substring(0, 160) + '…'
+                              : es;
+                          // Archive fallback: if permission denied on delete, try marking archived
+                          if (es.contains('PERMISSION_DENIED')) {
                             final removingId = _customTabs[i]['id']!;
-                            await _repo!.deleteCustomTab(removingId);
-                          } catch (e, st) {
-                            if (!mounted) return;
-                            debugPrint('Tab delete error: $e\n$st');
-                            final es = e.toString();
-              final msg = es.contains('PERMISSION_DENIED')
-                ? 'Permission denied deleting tab.'
-                : 'Failed to remove tab';
-                            final detail = es.length > 160 ? es.substring(0, 160) + '…' : es;
-                            // Archive fallback: if permission denied on delete, try marking archived
-                            if (es.contains('PERMISSION_DENIED')) {
-                              final removingId = _customTabs[i]['id']!;
-                              // First attempt: set createdBy to current uid if empty then retry delete
-                              try {
-                                final docRef = FirebaseFirestore.instance
-                                    .collection('accounts')
-                                    .doc(widget.accountId)
-                                    .collection('customTabs')
-                                    .doc(removingId);
-                                final snap = await docRef.get();
-                                final data = snap.data();
-                                final currentUid = FirebaseAuth.instance.currentUser?.uid;
-                                final tabCreator = data?['createdBy'];
-                                final ownerUid = _accountDoc?['createdBy'];
-                                final isOwner = ownerUid != null && currentUid == ownerUid;
-                                final members = (_accountDoc?['members'] as List?)?.map((e)=>e.toString()).toList() ?? const [];
-                                final isMember = currentUid != null && members.contains(currentUid);
-                                final diag = 'Delete denied. uid=$currentUid tab.createdBy=$tabCreator owner=$ownerUid isOwner=$isOwner isMember=$isMember archived=${data?['archived']}';
-                                debugPrint(diag);
-                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(diag.substring(0, diag.length.clamp(0, 180)))));
-                                if (currentUid != null && (data?['createdBy'] == null || (data?['createdBy'] as String).isEmpty)) {
-                                  await docRef.set({'createdBy': currentUid, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
-                                  // Retry delete
-                                  try {
-                                    await _repo!.deleteCustomTab(removingId);
-                                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tab deleted after owner claim')));
-                                    return;
-                                  } catch (re) {
-                                    debugPrint('Retry delete failed: $re');
-                                  }
+                            // First attempt: set createdBy to current uid if empty then retry delete
+                            try {
+                              final docRef = FirebaseFirestore.instance
+                                  .collection('accounts')
+                                  .doc(widget.accountId)
+                                  .collection('customTabs')
+                                  .doc(removingId);
+                              final snap = await docRef.get();
+                              final data = snap.data();
+                              final currentUid =
+                                  FirebaseAuth.instance.currentUser?.uid;
+                              final tabCreator = data?['createdBy'];
+                              final ownerUid = _accountDoc?['createdBy'];
+                              final isOwner =
+                                  ownerUid != null && currentUid == ownerUid;
+                              final members =
+                                  (_accountDoc?['members'] as List?)
+                                      ?.map((e) => e.toString())
+                                      .toList() ??
+                                  const [];
+                              final isMember =
+                                  currentUid != null &&
+                                  members.contains(currentUid);
+                              final diag =
+                                  'Delete denied. uid=$currentUid tab.createdBy=$tabCreator owner=$ownerUid isOwner=$isOwner isMember=$isMember archived=${data?['archived']}';
+                              debugPrint(diag);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    diag.substring(
+                                      0,
+                                      diag.length.clamp(0, 180),
+                                    ),
+                                  ),
+                                ),
+                              );
+                              if (currentUid != null &&
+                                  (data?['createdBy'] == null ||
+                                      (data?['createdBy'] as String).isEmpty)) {
+                                await docRef.set({
+                                  'createdBy': currentUid,
+                                  'updatedAt': FieldValue.serverTimestamp(),
+                                }, SetOptions(merge: true));
+                                // Retry delete
+                                try {
+                                  await _repo!.deleteCustomTab(removingId);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Tab deleted after owner claim',
+                                      ),
+                                    ),
+                                  );
+                                  return;
+                                } catch (re) {
+                                  debugPrint('Retry delete failed: $re');
                                 }
-                              } catch (claimErr) {
-                                debugPrint('Owner claim attempt failed: $claimErr');
                               }
-                              // Second attempt: archive fallback
-                              try {
-                                await FirebaseFirestore.instance
-                                    .collection('accounts')
-                                    .doc(widget.accountId)
-                                    .collection('customTabs')
-                                    .doc(removingId)
-                                    .set({'archived': true, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
-                                setState(() {
-                                  _customTabs.removeWhere((t) => t['id'] == removingId);
-                                });
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Tab archived (hidden)')),
-                                );
-                                return;
-                              } catch (ae) {
-                                debugPrint('Archive fallback failed: $ae');
-                              }
+                            } catch (claimErr) {
+                              debugPrint(
+                                'Owner claim attempt failed: $claimErr',
+                              );
                             }
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('$msg\n$detail')),
-                            );
+                            // Second attempt: archive fallback
+                            try {
+                              await FirebaseFirestore.instance
+                                  .collection('accounts')
+                                  .doc(widget.accountId)
+                                  .collection('customTabs')
+                                  .doc(removingId)
+                                  .set({
+                                    'archived': true,
+                                    'updatedAt': FieldValue.serverTimestamp(),
+                                  }, SetOptions(merge: true));
+                              setState(() {
+                                _customTabs.removeWhere(
+                                  (t) => t['id'] == removingId,
+                                );
+                              });
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Tab archived (hidden)'),
+                                ),
+                              );
+                              return;
+                            } catch (ae) {
+                              debugPrint('Archive fallback failed: $ae');
+                            }
                           }
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('$msg\n$detail')),
+                          );
                         }
-                      },
-                    ),
-                  ],
-                ),
+                      }
+                    },
+                  ),
+                ],
               ),
-          ],
+            ),
+        ],
         if (isOwner) ...[
           const Divider(height: 1),
           Padding(
@@ -1675,7 +1733,8 @@ class _MainTabsPageState extends State<MainTabsPage> {
       );
       final dir = await svc.exportAll();
       // Zip and move to Downloads/BudgetBuddy
-      final zipName = 'bb_receipts_${widget.accountId}_${DateTime.now().millisecondsSinceEpoch}.zip';
+      final zipName =
+          'bb_receipts_${widget.accountId}_${DateTime.now().millisecondsSinceEpoch}.zip';
       final zipped = await AndroidDownloadsService.zipToDownloads(
         sourceDir: dir,
         fileName: zipName,
@@ -3012,7 +3071,10 @@ class _MainTabsPageState extends State<MainTabsPage> {
             final isNew = id.isEmpty || !prevById.containsKey(id);
             try {
               if (isNew) {
-                final assigned = await _repo!.addOr(r, withId: id.isEmpty ? null : id);
+                final assigned = await _repo!.addOr(
+                  r,
+                  withId: id.isEmpty ? null : id,
+                );
                 if (id.isEmpty) {
                   r['id'] = assigned;
                 }
@@ -3030,7 +3092,11 @@ class _MainTabsPageState extends State<MainTabsPage> {
           };
           for (final id in prevById.keys) {
             if (!nextIds.contains(id)) {
-              try { await _repo!.deleteOr(id); } catch (e) { if (mounted) _showCloudWarning(e); }
+              try {
+                await _repo!.deleteOr(id);
+              } catch (e) {
+                if (mounted) _showCloudWarning(e);
+              }
             }
           }
         });
