@@ -7,6 +7,8 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui';
 import 'package:image/image.dart' as img;
+import 'package:budgetbuddy/widgets/money_field_utils.dart';
+import 'package:budgetbuddy/widgets/two_decimal_input_formatter.dart';
 import 'package:budgetbuddy/widgets/pressable_neumorphic.dart';
 import 'package:budgetbuddy/widgets/app_gradient_background.dart';
 
@@ -1044,6 +1046,7 @@ class SavingsEditPage extends StatefulWidget {
 
 class _SavingsEditPageState extends State<SavingsEditPage> {
   late TextEditingController amountController;
+  final FocusNode _amountFocus = FocusNode();
   late TextEditingController dateController;
   late TextEditingController noteController;
   Uint8List? receipt;
@@ -1088,6 +1091,13 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
       'Home': ['Down Payment', 'Renovation'],
       'Car': ['Down Payment', 'Upgrade'],
       'Personal': ['Gadgets', 'Hobby'],
+      // Newly requested Compensation category
+      'Compensation': [
+        'Salary',
+        'Bonus',
+        'Incentive',
+        'Reimbursement',
+      ],
     };
 
     bool changed = false;
@@ -1117,6 +1127,11 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
 
     selectedCategory = widget.saving['Category'] ?? '';
     selectedSubcategory = widget.saving['Subcategory'] ?? '';
+    // If new saving (empty category) default to Compensation
+    if ((selectedCategory == null || selectedCategory!.isEmpty) && categoriesMap.containsKey('Compensation')) {
+      selectedCategory = 'Compensation';
+      selectedSubcategory = null; // force user to pick specific subcategory
+    }
 
     String amtText = '';
     final amt = widget.saving['Amount'];
@@ -1145,6 +1160,7 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
   @override
   void dispose() {
     amountController.dispose();
+    _amountFocus.dispose();
     dateController.dispose();
     noteController.dispose();
     super.dispose();
@@ -1439,14 +1455,23 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
                           prefixIcon: Icon(Icons.category_outlined),
                           border: OutlineInputBorder(),
                         ),
-                        items: categoriesMap.keys
-                            .map<DropdownMenuItem<String>>(
-                              (cat) => DropdownMenuItem(
-                                value: cat,
-                                child: Text(cat),
-                              ),
-                            )
-                            .toList(),
+                        items: () {
+                          final keys = categoriesMap.keys.toList();
+                          // Move Compensation to top if present
+                          keys.sort((a,b){
+                            if (a == 'Compensation') return -1;
+                            if (b == 'Compensation') return 1;
+                            return a.toLowerCase().compareTo(b.toLowerCase());
+                          });
+                          return keys
+                              .map<DropdownMenuItem<String>>(
+                                (cat) => DropdownMenuItem(
+                                  value: cat,
+                                  child: Text(cat),
+                                ),
+                              )
+                              .toList();
+                        }(),
                         onChanged: (val) {
                           setState(() {
                             selectedCategory = val;
@@ -1524,8 +1549,11 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
-                  inputFormatters: [CurrencyInputFormatter()],
+                  focusNode: _amountFocus,
+                  inputFormatters: [TwoDecimalInputFormatter()],
                   onChanged: (_) => setState(() {}),
+                  onEditingComplete: () => _amountFocus.unfocus(),
+                  onTapOutside: (_) { if (_amountFocus.hasFocus) _amountFocus.unfocus(); },
                   style: const TextStyle(fontSize: 20),
                   decoration: const InputDecoration(
                     labelText: 'Amount',
@@ -1701,8 +1729,9 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
   }
 
   void _handleSaveTap() {
-    final raw = amountController.text.replaceAll(',', '').trim();
-    final amountVal = double.tryParse(raw) ?? 0.0;
+    if (_amountFocus.hasFocus) _amountFocus.unfocus();
+    final amountVal = parseLooseAmount(amountController.text);
+    amountController.text = formatTwoDecimalsGrouped(amountVal);
     final missing = <String>[];
     if (selectedCategory == null) missing.add('Category');
     if (selectedSubcategory == null ||
@@ -1739,60 +1768,7 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
   }
 }
 
-// Decimal currency formatter (no symbol, adds grouping, 2 decimals)
-class CurrencyInputFormatter extends TextInputFormatter {
-  final NumberFormat _fmt = NumberFormat.decimalPattern();
-
-  @override
-  TextEditingValue formatEditUpdate(
-    TextEditingValue oldValue,
-    TextEditingValue newValue,
-  ) {
-    final text = newValue.text;
-    if (text.isEmpty) return newValue.copyWith(text: '');
-
-    final buffer = StringBuffer();
-    int dotCount = 0;
-    for (var i = 0; i < text.length; i++) {
-      final ch = text[i];
-      if (ch == '.') {
-        if (dotCount == 0) {
-          buffer.write('.');
-          dotCount++;
-        }
-      } else if (RegExp(r'\d').hasMatch(ch)) {
-        buffer.write(ch);
-      }
-    }
-    var sanitized = buffer.toString();
-
-    if (sanitized.contains('.')) {
-      final parts = sanitized.split('.');
-      final decimals = parts[1];
-      sanitized =
-          '${parts[0]}.${decimals.length > 2 ? decimals.substring(0, 2) : decimals}';
-    }
-
-    String intPart = sanitized;
-    String decPart = '';
-    if (sanitized.contains('.')) {
-      final parts = sanitized.split('.');
-      intPart = parts[0];
-      decPart = parts[1];
-    }
-
-    intPart = intPart.isEmpty ? '0' : int.parse(intPart).toString();
-    String grouped = _fmt.format(int.parse(intPart));
-    if (decPart.isNotEmpty) {
-      grouped = '$grouped.$decPart';
-    }
-
-    return TextEditingValue(
-      text: grouped,
-      selection: TextSelection.collapsed(offset: grouped.length),
-    );
-  }
-}
+// (Formatter moved to widgets/two_decimal_input_formatter.dart)
 
 Color _savingsCategoryColor(BuildContext context, String? cat) {
   final cs = Theme.of(context).colorScheme;

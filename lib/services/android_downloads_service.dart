@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:archive/archive_io.dart';
-import 'package:external_path/external_path.dart';
 
 class AndroidDownloadsService {
   /// Zips [sourceDir] contents into [fileName] and saves under
@@ -10,8 +9,9 @@ class AndroidDownloadsService {
     required String fileName,
   }) async {
     try {
-      final downloadsPath =
-          await ExternalPath.getExternalStoragePublicDirectory('Downloads');
+  // Best-effort Android public Downloads directory path
+  // Note: On some devices/versions this may vary. Adjust if needed.
+  final downloadsPath = '/storage/emulated/0/Download';
       final targetDir = Directory('$downloadsPath/BudgetBuddy');
       await targetDir.create(recursive: true);
       final outFile = File('${targetDir.path}/$fileName');

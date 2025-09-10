@@ -3,6 +3,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:hive/hive.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:budgetbuddy/widgets/two_decimal_input_formatter.dart';
+import 'package:budgetbuddy/widgets/money_field_utils.dart';
 import 'dart:io';
 // import 'dart:typed_data'; // unnecessary
 import 'dart:ui';
@@ -1084,6 +1086,7 @@ class ExpenseEditPage extends StatefulWidget {
 
 class _ExpenseEditPageState extends State<ExpenseEditPage> {
   late TextEditingController amountController;
+  final FocusNode _amountFocus = FocusNode();
   late TextEditingController dateController;
   late TextEditingController noteController;
   Uint8List? receipt;
@@ -1103,13 +1106,11 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
   @override
   void initState() {
     super.initState();
-    final rawMap =
-        box.get('categories') as Map? ??
-        {
-          'Grocery': [],
-          'House': ['Electricity Bill', 'Water Bill'],
-          'Car': [],
-        };
+    final rawMap = box.get('categories') as Map? ?? {
+      'Grocery': [],
+      'House': ['Electricity Bill', 'Water Bill'],
+      'Car': [],
+    };
 
     categoriesMap = rawMap.map<String, List<String>>((key, value) {
       final list = (value as List).map((e) => e.toString()).toList();
@@ -1129,6 +1130,13 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
       'Car': ['Fuel', 'Maintenance', 'Parking', 'Insurance', 'Registration'],
       // Extra helpful category
       'Health': ['Medicine', 'Checkup', 'Dental', 'Insurance'],
+      // Newly requested Food category with fixed subcategories
+      'Food': [
+        'Restaurant',
+        'Food Stall',
+        'Street Food',
+        'Coffee Shop',
+      ],
     };
 
     bool changed = false;
@@ -1156,8 +1164,14 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
       box.put('categories', categoriesMap);
     }
 
-    selectedCategory = widget.expense['Category'] ?? '';
-    selectedSubcategory = widget.expense['Subcategory'] ?? '';
+    selectedCategory = (widget.expense['Category'] ?? '') as String?;
+    selectedSubcategory = (widget.expense['Subcategory'] ?? '') as String?;
+    // If creating a brand-new expense (empty category), default to Food
+    if ((selectedCategory == null || selectedCategory!.isEmpty) && categoriesMap.containsKey('Food')) {
+      selectedCategory = 'Food';
+      // Leave subcategory unselected so user chooses; could also pick first option if desired
+      selectedSubcategory = null;
+    }
     // Pre-format amount if present
     String amtText = '';
     final amt = widget.expense['Amount'];
@@ -1187,7 +1201,8 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
 
   @override
   void dispose() {
-    amountController.dispose();
+  amountController.dispose();
+  _amountFocus.dispose();
     dateController.dispose();
     noteController.dispose();
     super.dispose();
@@ -1486,8 +1501,9 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                       ),
                     ),
                     const SizedBox(width: 12),
+                    // Disable add category when Food is selected to keep requested list stable
                     ElevatedButton.icon(
-                      onPressed: _addNewCategory,
+                      onPressed: selectedCategory == 'Food' ? null : _addNewCategory,
                       icon: const Icon(Icons.add),
                       label: const Text("Add Category"),
                     ),
@@ -1530,7 +1546,7 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                       const SizedBox(width: 12),
                       IconButton.filledTonal(
                         tooltip: 'Add subcategory',
-                        onPressed: _addNewSubcategory,
+                        onPressed: selectedCategory == 'Food' ? null : _addNewSubcategory,
                         icon: const Icon(Icons.add),
                       ),
                     ],
@@ -1554,8 +1570,15 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
-                  inputFormatters: [CurrencyInputFormatter()],
+                  focusNode: _amountFocus,
+                  inputFormatters: [TwoDecimalInputFormatter()],
                   onChanged: (_) => setState(() {}),
+                  onEditingComplete: () {
+                    _amountFocus.unfocus();
+                  },
+                  onTapOutside: (_) {
+                    if (_amountFocus.hasFocus) _amountFocus.unfocus();
+                  },
                   style: const TextStyle(fontSize: 20),
                   decoration: const InputDecoration(
                     labelText: 'Amount',
@@ -1728,8 +1751,9 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
   }
 
   void _handleSaveTap() {
-    final raw = amountController.text.replaceAll(',', '').trim();
-    final amountVal = double.tryParse(raw) ?? 0.0;
+    if (_amountFocus.hasFocus) _amountFocus.unfocus();
+    final amountVal = parseLooseAmount(amountController.text);
+    amountController.text = formatTwoDecimalsGrouped(amountVal);
     final missing = <String>[];
     if (selectedCategory == null) missing.add('Category');
     if (selectedSubcategory == null ||
@@ -1769,63 +1793,7 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
   }
 }
 
-// Lightweight decimal currency formatter (no symbol, adds grouping and limits to 2 decimals)
-class CurrencyInputFormatter extends TextInputFormatter {
-  final NumberFormat _fmt = NumberFormat.decimalPattern();
-
-  @override
-  TextEditingValue formatEditUpdate(
-    TextEditingValue oldValue,
-    TextEditingValue newValue,
-  ) {
-    final text = newValue.text;
-    if (text.isEmpty) return newValue.copyWith(text: '');
-
-    // Keep digits and at most one decimal point
-    final buffer = StringBuffer();
-    int dotCount = 0;
-    for (final ch in text.characters) {
-      if (ch == '.') {
-        if (dotCount == 0) {
-          buffer.write('.');
-          dotCount++;
-        }
-      } else if (RegExp(r'\d').hasMatch(ch)) {
-        buffer.write(ch);
-      }
-    }
-    var sanitized = buffer.toString();
-
-    // Limit to two decimal places if any
-    if (sanitized.contains('.')) {
-      final parts = sanitized.split('.');
-      final decimals = parts[1];
-      sanitized =
-          '${parts[0]}.${decimals.length > 2 ? decimals.substring(0, 2) : decimals}';
-    }
-
-    // Split into int/decimals for grouping
-    String intPart = sanitized;
-    String decPart = '';
-    if (sanitized.contains('.')) {
-      final parts = sanitized.split('.');
-      intPart = parts[0];
-      decPart = parts[1];
-    }
-
-    // Avoid leading zeroes like 0001
-    intPart = intPart.isEmpty ? '0' : int.parse(intPart).toString();
-    String grouped = _fmt.format(int.parse(intPart));
-    if (decPart.isNotEmpty) {
-      grouped = '$grouped.$decPart';
-    }
-
-    return TextEditingValue(
-      text: grouped,
-      selection: TextSelection.collapsed(offset: grouped.length),
-    );
-  }
-}
+// (Formatter moved to widgets/two_decimal_input_formatter.dart)
 
 // Category helpers for quick visual grouping
 Color _categoryColor(BuildContext context, String? cat) {

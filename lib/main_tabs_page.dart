@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
+import 'features/custom_tabs/custom_tab_page.dart';
 import 'package:hive/hive.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'services/auth_service.dart';
@@ -11,11 +12,13 @@ import 'services/auth_service.dart';
 import 'services/shared_account_repository.dart';
 import 'services/local_receipt_service.dart';
 import 'services/receipt_backup_service.dart';
+import 'services/android_downloads_service.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'features/home/home_tab.dart';
 import 'features/expenses/expenses_tab.dart';
 import 'features/savings/savings_tab.dart';
+import 'features/or/or_tab.dart';
 import 'features/bills/bills_tab.dart';
 import 'features/report/report_tab.dart';
 import 'manage_accounts_page.dart';
@@ -64,6 +67,10 @@ class _MainTabsPageState extends State<MainTabsPage> {
   final _billsScroll = ScrollController();
   final _reportScroll = ScrollController();
   final _settingsScroll = ScrollController();
+  // Dynamic custom tabs
+  List<Map<String, String>> _customTabs = const []; // [{id, title}]
+  final List<ScrollController> _customScrolls = [];
+  StreamSubscription? _customTabsSub;
   Map<String, dynamic>? _accountDoc;
   // Multi-account
   List<String> _linkedAccounts = const [];
@@ -323,6 +330,22 @@ class _MainTabsPageState extends State<MainTabsPage> {
     tableData['Savings'] = savList;
 
     setState(() {});
+    // Load custom tabs list per account
+    final rawCustomTabs = box.get('customTabs_${widget.accountId}') as List?;
+    if (rawCustomTabs is List) {
+      _customTabs = rawCustomTabs
+          .whereType<Map>()
+          .map((m) => m.map((k, v) => MapEntry(k.toString(), v.toString())))
+          .map<Map<String, String>>((m) => {
+                'id': (m['id'] ?? '').toString(),
+                'title': (m['title'] ?? 'New Tab').toString(),
+              })
+          .where((m) => (m['id'] ?? '').isNotEmpty)
+          .toList();
+    } else {
+      _customTabs = const [];
+    }
+    _ensureCustomScrolls();
   }
 
   void _saveLocalOnly() {
@@ -358,6 +381,8 @@ class _MainTabsPageState extends State<MainTabsPage> {
       'offline_bills_${widget.accountId}',
       tableData['Bills'] ?? <Map<String, dynamic>>[],
     );
+  // Persist Custom Tabs list per account
+  box.put('customTabs_${widget.accountId}', _customTabs);
   }
 
   void _initShared() {
@@ -402,6 +427,25 @@ class _MainTabsPageState extends State<MainTabsPage> {
     _meta$ = _repo!.metaStream();
     _account$ = _repo!.accountStream();
     _account$!.listen((doc) => setState(() => _accountDoc = doc ?? {}));
+
+    // Start custom tabs sync (fallback to cached if stream fails)
+    _customTabsSub?.cancel();
+    _customTabsSub = _repo!.customTabsStream().listen((rows) {
+      final tabs = rows
+          .map((r) => {
+                'id': (r['id'] ?? '').toString(),
+                'title': (r['title'] ?? 'Tab').toString(),
+              })
+          .where((m) => (m['id'] ?? '').isNotEmpty)
+          .toList();
+      setState(() {
+        _customTabs = tabs;
+        _ensureCustomScrolls();
+      });
+      box.put('customTabs_${widget.accountId}', tabs);
+    }, onError: (_) {
+      // keep local cache if stream errors
+    });
 
     // use class method _refreshLinkedAccountsCache()
 
@@ -690,6 +734,17 @@ class _MainTabsPageState extends State<MainTabsPage> {
     });
   }
 
+  void _ensureCustomScrolls() {
+    // Keep one scroll controller per custom tab
+    while (_customScrolls.length < _customTabs.length) {
+      _customScrolls.add(ScrollController());
+    }
+    while (_customScrolls.length > _customTabs.length) {
+      final c = _customScrolls.removeLast();
+      c.dispose();
+    }
+  }
+
   void _refreshLinkedAccountsCache() {
     final uid = _uid;
     if (uid == null) return;
@@ -838,7 +893,8 @@ class _MainTabsPageState extends State<MainTabsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final pages = <Widget>[
+    // Base pages
+    final basePages = <Widget>[
       PrimaryScrollController(
         controller: _homeScroll,
         child: HomeTab(
@@ -860,16 +916,36 @@ class _MainTabsPageState extends State<MainTabsPage> {
         child: _buildBillsPage(),
       ),
       PrimaryScrollController(
+        controller: _billsScroll, // reuse scroll controller for now
+        child: _buildOrPage(),
+      ),
+      PrimaryScrollController(
         controller: _reportScroll,
         child: _buildReportPage(),
       ),
+    ];
+    // Dynamic custom tab pages inserted after Report
+    final customPages = <Widget>[
+      for (int i = 0; i < _customTabs.length; i++)
+        PrimaryScrollController(
+          controller: _customScrolls[i],
+          child: CustomTabPageHost(
+            accountId: widget.accountId,
+            tabId: _customTabs[i]['id']!,
+            title: _customTabs[i]['title']!,
+          ),
+        ),
+    ];
+    final pages = <Widget>[
+      ...basePages,
+      ...customPages,
       PrimaryScrollController(
         controller: _settingsScroll,
         child: _buildSettingsPage(),
       ),
     ];
 
-    final destinations = const <NavigationDestination>[
+    final baseDestinations = const <NavigationDestination>[
       NavigationDestination(
         icon: Icon(Icons.home_outlined),
         selectedIcon: Icon(Icons.home),
@@ -889,13 +965,30 @@ class _MainTabsPageState extends State<MainTabsPage> {
         icon: Icon(Icons.receipt_long_outlined),
         selectedIcon: Icon(Icons.receipt_long),
         label: 'Bills',
-      ),
+  ),
+      NavigationDestination(
+        icon: Icon(Icons.account_balance_wallet_outlined),
+        selectedIcon: Icon(Icons.account_balance_wallet),
+        label: 'OR',
+  ),
       NavigationDestination(
         icon: Icon(Icons.pie_chart_outline),
         selectedIcon: Icon(Icons.pie_chart),
         label: 'Report',
-      ),
-      NavigationDestination(
+  ),
+    ];
+    final customDestinations = <NavigationDestination>[
+      for (final t in _customTabs)
+        NavigationDestination(
+          icon: const Icon(Icons.tab_outlined),
+          selectedIcon: const Icon(Icons.tab),
+          label: t['title'] ?? 'Tab',
+        ),
+    ];
+    final destinations = <NavigationDestination>[
+      ...baseDestinations,
+      ...customDestinations,
+      const NavigationDestination(
         icon: Icon(Icons.settings_outlined),
         selectedIcon: Icon(Icons.settings),
         label: 'Settings',
@@ -1016,21 +1109,24 @@ class _MainTabsPageState extends State<MainTabsPage> {
                 onTap: (i) {
                   if (i == _index) {
                     // Scroll current tab to top
-                    final map = {
-                      0: _homeScroll,
-                      1: _expensesScroll,
-                      2: _savingsScroll,
-                      3: _billsScroll,
-                      4: _reportScroll,
-                      5: _settingsScroll,
-                    };
-                    final ctrl = map[i];
-                    if (ctrl != null && ctrl.hasClients) {
-                      ctrl.animateTo(
-                        0,
-                        duration: const Duration(milliseconds: 350),
-                        curve: Curves.easeOutCubic,
-                      );
+                    final controllers = <ScrollController>[
+                      _homeScroll,
+                      _expensesScroll,
+                      _savingsScroll,
+                      _billsScroll,
+                      _reportScroll,
+                      ..._customScrolls,
+                      _settingsScroll,
+                    ];
+                    if (i >= 0 && i < controllers.length) {
+                      final ctrl = controllers[i];
+                      if (ctrl.hasClients) {
+                        ctrl.animateTo(
+                          0,
+                          duration: const Duration(milliseconds: 350),
+                          curve: Curves.easeOutCubic,
+                        );
+                      }
                     }
                     return;
                   }
@@ -1052,6 +1148,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
   @override
   void dispose() {
     _tapAutosave?.cancel();
+    _customTabsSub?.cancel();
     _pageController.dispose();
     _homeScroll.dispose();
     _expensesScroll.dispose();
@@ -1184,13 +1281,13 @@ class _MainTabsPageState extends State<MainTabsPage> {
             ],
           ),
         ),
-        ListTile(
+  ListTile(
           leading: const Icon(Icons.swap_horiz),
           title: const Text('Switch account'),
           subtitle: const Text('Change the active account'),
           onTap: () => _showAccountSwitcher(context),
         ),
-        ListTile(
+  ListTile(
           leading: const Icon(Icons.manage_accounts_outlined),
           title: const Text('Manage accounts'),
           subtitle: const Text('Rename, remove, or reorder linked accounts'),
@@ -1218,6 +1315,224 @@ class _MainTabsPageState extends State<MainTabsPage> {
             }
           },
         ),
+        const Divider(height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text('Custom tabs', style: Theme.of(context).textTheme.titleMedium),
+        ),
+        ListTile(
+          leading: const Icon(Icons.add_to_photos_outlined),
+          title: const Text('Add New Tab'),
+          subtitle: const Text('Create a custom tab after Reports'),
+          onTap: () async {
+            String name = 'New Tab';
+            await showDialog(
+              context: context,
+              builder: (d) => StatefulBuilder(
+                builder: (ctx, setM) => AlertDialog(
+                  title: const Text('Create New Tab'),
+                  content: TextField(
+                    decoration: const InputDecoration(
+                      labelText: 'Tab name',
+                      prefixIcon: Icon(Icons.tab_outlined),
+                    ),
+                    onChanged: (v) => name = v.trim(),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                      },
+                      child: const Text('Create'),
+                    ),
+                  ],
+                ),
+              ));
+            if (name.isEmpty) name = 'New Tab';
+            try {
+              if (_repo == null) return;
+              final id = await _repo!.addCustomTab(title: name, order: _customTabs.length);
+              if (!mounted) return;
+              // Navigate once the stream pushes new list; optimistic fallback after short delay
+              Future.delayed(const Duration(milliseconds: 300), () {
+                if (!mounted) return;
+                final idx = _customTabs.indexWhere((t) => t['id'] == id);
+                final target = idx >= 0 ? (5 + idx) : (5 + _customTabs.length);
+                _pageController.animateToPage(
+                  target,
+                  duration: const Duration(milliseconds: 360),
+                  curve: Curves.easeOutCubic,
+                );
+              });
+            } catch (e) {
+              if (!mounted) return;
+              final msg = e.toString().contains('Maximum custom tabs')
+                  ? 'Limit reached (10 custom tabs max)'
+                  : 'Failed to create tab';
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(msg)),
+              );
+            }
+          },
+        ),
+        if (_customTabs.isNotEmpty)
+          ...[
+            for (int i = 0; i < _customTabs.length; i++)
+              ListTile(
+                leading: const Icon(Icons.tab),
+                title: Text(_customTabs[i]['title'] ?? 'Tab'),
+                // Removed ID and creator details per request
+                subtitle: null,
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: 'Rename',
+                      icon: const Icon(Icons.edit_outlined),
+                      onPressed: () async {
+                        String newName = _customTabs[i]['title'] ?? 'Tab';
+                        final ok = await showDialog<bool>(
+                          context: context,
+                          builder: (d) => AlertDialog(
+                            title: const Text('Rename Tab'),
+                            content: TextField(
+                              controller: TextEditingController(text: newName),
+                              onChanged: (v) => newName = v.trim(),
+                              decoration: const InputDecoration(
+                                labelText: 'Tab name',
+                              ),
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(d).pop(false),
+                                child: const Text('Cancel'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.of(d).pop(true),
+                                child: const Text('Save'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (ok == true) {
+                          try {
+                            if (_repo == null) return;
+                            await _repo!.renameCustomTab(
+                              _customTabs[i]['id']!,
+                              newName.isEmpty ? 'Tab' : newName,
+                            );
+                          } catch (e) {
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Failed to rename: $e')),
+                            );
+                          }
+                        }
+                      },
+                    ),
+                    IconButton(
+                      tooltip: 'Remove',
+                      icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                      onPressed: () async {
+                        final ok = await showDialog<bool>(
+                          context: context,
+                          builder: (d) => AlertDialog(
+                            title: const Text('Remove Tab'),
+                            content: Text('Remove "${_customTabs[i]['title']}"? Records will be removed from cloud.'),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(d).pop(false),
+                                child: const Text('Cancel'),
+                              ),
+                              TextButton(
+                                onPressed: () => Navigator.of(d).pop(true),
+                                child: const Text('Remove'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (ok == true) {
+                          try {
+                            if (_repo == null) return;
+                            final removingId = _customTabs[i]['id']!;
+                            await _repo!.deleteCustomTab(removingId);
+                          } catch (e, st) {
+                            if (!mounted) return;
+                            debugPrint('Tab delete error: $e\n$st');
+                            final es = e.toString();
+              final msg = es.contains('PERMISSION_DENIED')
+                ? 'Permission denied deleting tab.'
+                : 'Failed to remove tab';
+                            final detail = es.length > 160 ? es.substring(0, 160) + '…' : es;
+                            // Archive fallback: if permission denied on delete, try marking archived
+                            if (es.contains('PERMISSION_DENIED')) {
+                              final removingId = _customTabs[i]['id']!;
+                              // First attempt: set createdBy to current uid if empty then retry delete
+                              try {
+                                final docRef = FirebaseFirestore.instance
+                                    .collection('accounts')
+                                    .doc(widget.accountId)
+                                    .collection('customTabs')
+                                    .doc(removingId);
+                                final snap = await docRef.get();
+                                final data = snap.data();
+                                final currentUid = FirebaseAuth.instance.currentUser?.uid;
+                                final tabCreator = data?['createdBy'];
+                                final ownerUid = _accountDoc?['createdBy'];
+                                final isOwner = ownerUid != null && currentUid == ownerUid;
+                                final members = (_accountDoc?['members'] as List?)?.map((e)=>e.toString()).toList() ?? const [];
+                                final isMember = currentUid != null && members.contains(currentUid);
+                                final diag = 'Delete denied. uid=$currentUid tab.createdBy=$tabCreator owner=$ownerUid isOwner=$isOwner isMember=$isMember archived=${data?['archived']}';
+                                debugPrint(diag);
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(diag.substring(0, diag.length.clamp(0, 180)))));
+                                if (currentUid != null && (data?['createdBy'] == null || (data?['createdBy'] as String).isEmpty)) {
+                                  await docRef.set({'createdBy': currentUid, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+                                  // Retry delete
+                                  try {
+                                    await _repo!.deleteCustomTab(removingId);
+                                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tab deleted after owner claim')));
+                                    return;
+                                  } catch (re) {
+                                    debugPrint('Retry delete failed: $re');
+                                  }
+                                }
+                              } catch (claimErr) {
+                                debugPrint('Owner claim attempt failed: $claimErr');
+                              }
+                              // Second attempt: archive fallback
+                              try {
+                                await FirebaseFirestore.instance
+                                    .collection('accounts')
+                                    .doc(widget.accountId)
+                                    .collection('customTabs')
+                                    .doc(removingId)
+                                    .set({'archived': true, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+                                setState(() {
+                                  _customTabs.removeWhere((t) => t['id'] == removingId);
+                                });
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Tab archived (hidden)')),
+                                );
+                                return;
+                              } catch (ae) {
+                                debugPrint('Archive fallback failed: $ae');
+                              }
+                            }
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('$msg\n$detail')),
+                            );
+                          }
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+          ],
         if (isOwner) ...[
           const Divider(height: 1),
           Padding(
@@ -1359,19 +1674,16 @@ class _MainTabsPageState extends State<MainTabsPage> {
         repo: _repo!,
       );
       final dir = await svc.exportAll();
+      // Zip and move to Downloads/BudgetBuddy
+      final zipName = 'bb_receipts_${widget.accountId}_${DateTime.now().millisecondsSinceEpoch}.zip';
+      final zipped = await AndroidDownloadsService.zipToDownloads(
+        sourceDir: dir,
+        fileName: zipName,
+      );
       if (!mounted) return;
-      showDialog(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Export complete'),
-          content: SelectableText('Saved to:\n${dir.path}'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Close'),
-            ),
-          ],
-        ),
+      final path = zipped?.path ?? dir.path;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Exported to Downloads/BudgetBuddy: $path')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -2671,6 +2983,57 @@ class _MainTabsPageState extends State<MainTabsPage> {
         });
         // Also write per-account offline snapshot right away
         box.put('offline_bills_${widget.accountId}', newRows);
+      },
+    );
+  }
+
+  // OR (Official Receipts) - mirrors savings style minimal for now
+  Widget _buildOrPage() {
+    final rows = tableData['OR'] ?? [];
+    final expensesRows = tableData['Expenses'] ?? [];
+    return OrTab(
+      rows: rows,
+      expensesRows: expensesRows,
+      onRowsChanged: (newRows) {
+        setState(() {
+          tableData['OR'] = List<Map<String, dynamic>>.from(newRows);
+        });
+        _saveLocalOnly();
+        // Firestore sync attempt
+        Future(() async {
+          if (_repo == null) return;
+          final prev = rows;
+          final prevById = {
+            for (final r in prev)
+              if ((r['id'] ?? '').toString().isNotEmpty) (r['id'] as String): r,
+          };
+          for (final r in newRows) {
+            final id = (r['id'] ?? '').toString();
+            final isNew = id.isEmpty || !prevById.containsKey(id);
+            try {
+              if (isNew) {
+                final assigned = await _repo!.addOr(r, withId: id.isEmpty ? null : id);
+                if (id.isEmpty) {
+                  r['id'] = assigned;
+                }
+              } else {
+                await _repo!.updateOr(id, r);
+              }
+            } catch (e) {
+              if (mounted) _showCloudWarning(e);
+            }
+          }
+          // deletions
+          final nextIds = {
+            for (final r in newRows)
+              if ((r['id'] ?? '').toString().isNotEmpty) (r['id'] as String),
+          };
+          for (final id in prevById.keys) {
+            if (!nextIds.contains(id)) {
+              try { await _repo!.deleteOr(id); } catch (e) { if (mounted) _showCloudWarning(e); }
+            }
+          }
+        });
       },
     );
   }

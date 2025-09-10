@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'local_receipt_service.dart';
 
 class SharedAccountRepository {
   final _db = FirebaseFirestore.instance;
@@ -22,6 +23,12 @@ class SharedAccountRepository {
 
   CollectionReference<Map<String, dynamic>> get _billsCol =>
       _accountDoc.collection('bills');
+  // OR collection mirrors 'savings' semantics
+  CollectionReference<Map<String, dynamic>> get _orCol =>
+      _accountDoc.collection('or');
+
+  CollectionReference<Map<String, dynamic>> get _customTabsCol =>
+      _accountDoc.collection('customTabs');
 
   CollectionReference<Map<String, dynamic>> get _membersCol =>
       _accountDoc.collection('members');
@@ -133,7 +140,7 @@ class SharedAccountRepository {
           tx.update(_accountDoc, {'members': members});
         } else {
           // For non-owners, only allow join if account is joint AND an approval doc exists.
-          final data = accountSnap.data() ?? {};
+            final data = accountSnap.data() ?? {};
           final isJoint = (data['isJoint'] as bool?) ?? false;
           if (!isJoint) {
             // Not a joint account: this Gmail should create/own its own account instead.
@@ -299,6 +306,12 @@ class SharedAccountRepository {
         .snapshots()
         .map((qs) => qs.docs.map((d) => _fromDoc(d)).toList());
   }
+  Stream<List<Map<String, dynamic>>> orStream() {
+    return _orCol
+        .orderBy('date', descending: true)
+        .snapshots()
+        .map((qs) => qs.docs.map((d) => _fromDoc(d)).toList());
+  }
 
   Stream<List<Map<String, dynamic>>> billsStream() {
     return _billsCol
@@ -306,6 +319,230 @@ class SharedAccountRepository {
         .snapshots()
         .map((qs) => qs.docs.map((d) => _fromBillDoc(d)).toList());
   }
+
+  // Custom Tabs
+  Stream<List<Map<String, dynamic>>> customTabsStream() {
+  return _customTabsCol
+    .orderBy('order', descending: false)
+    .snapshots()
+    .map((qs) => qs.docs
+      .where((d) => (d.data()['archived'] != true))
+      .map((d) => _fromCustomTabDoc(d))
+      .toList());
+  }
+
+  Future<String> addCustomTab({required String title, int? order, String? withId}) async {
+    final data = _toCustomTabDoc({'title': title, 'order': order ?? 0});
+    // Enforce maximum number of custom tabs (10) using a counters doc inside meta
+    final countersDoc = _accountDoc.collection('meta').doc('counters');
+    return FirebaseFirestore.instance.runTransaction((tx) async {
+      final countersSnap = await tx.get(countersDoc);
+      int current = 0;
+      if (countersSnap.exists) {
+        final cd = countersSnap.data() as Map<String, dynamic>;
+        current = (cd['customTabsCount'] as num?)?.toInt() ?? 0;
+      }
+      if (withId == null || withId.isEmpty) {
+        if (current >= 10) {
+          throw Exception('Maximum custom tabs reached (10)');
+        }
+      }
+      // If creating a new tab
+      String newId = withId ?? '';
+      if (withId != null && withId.isNotEmpty) {
+        tx.set(_customTabsCol.doc(withId), data, SetOptions(merge: true));
+        newId = withId;
+      } else {
+        final newRef = _customTabsCol.doc();
+        tx.set(newRef, data);
+        newId = newRef.id;
+        tx.set(countersDoc, {
+          'customTabsCount': current + 1,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+      return newId;
+    });
+  }
+
+  Future<void> renameCustomTab(String id, String title) async {
+    await _customTabsCol.doc(id).set(
+      {
+        'title': title,
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+  }
+
+  Future<void> setCustomTabOrder(String id, int order) async {
+    await _customTabsCol.doc(id).set(
+      {
+        'order': order,
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+  }
+
+  Future<void> deleteCustomTab(String id) async {
+    final tabRef = _customTabsCol.doc(id);
+    final countersDoc = _accountDoc.collection('meta').doc('counters');
+    // Delete records in small pages (ignore individual permission failures but track)
+    bool hadPermissionErrors = false;
+    while (true) {
+      final page = await tabRef.collection('records').limit(200).get();
+      if (page.docs.isEmpty) break;
+      final batch = FirebaseFirestore.instance.batch();
+      int added = 0;
+      for (final d in page.docs) {
+        try {
+          batch.delete(d.reference);
+          added++;
+        } catch (_) {
+          hadPermissionErrors = true; // skip this doc
+        }
+      }
+      if (added == 0) break; // nothing we could delete
+      try {
+        await batch.commit();
+      } catch (e) {
+        // If batch fails completely, break to avoid infinite loop
+        hadPermissionErrors = true;
+        break;
+      }
+    }
+    // Delete the tab itself (even if some records remained)
+    try {
+      await tabRef.delete();
+    } catch (e) {
+      // Re-throw if it's not a permission issue
+      rethrow;
+    }
+    // Decrement counter (best effort)
+    try {
+      final snap = await countersDoc.get();
+      int current = 0;
+      if (snap.exists) {
+        final data = snap.data() as Map<String, dynamic>;
+        current = (data['customTabsCount'] as num?)?.toInt() ?? 0;
+      }
+      if (current > 0) {
+        await countersDoc.set({
+          'customTabsCount': current - 1,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    } catch (_) {
+      // ignore silent counter failure
+    }
+    if (hadPermissionErrors) {
+      throw Exception('Some records could not be removed (permissions) but tab deleted');
+    }
+  }
+
+  // (additional helper methods)
+  CollectionReference<Map<String, dynamic>> _customTabRecordsCol(String tabId) =>
+      _customTabsCol.doc(tabId).collection('records');
+
+  Stream<List<Map<String, dynamic>>> customTabRecordsStream(String tabId) {
+    return _customTabRecordsCol(tabId)
+        .orderBy('date', descending: true)
+        .snapshots()
+        .map((qs) => qs.docs.map((d) => _fromCustomRecordDoc(d)).toList());
+  }
+  Future<List<Map<String, dynamic>>> fetchAllCustomTabsOnce() async {
+    final qs = await _customTabsCol.orderBy('order', descending: false).get();
+    return qs.docs.map((d) => _fromCustomTabDoc(d)).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> fetchAllCustomTabRecordsOnce(String tabId) async {
+    final qs = await _customTabRecordsCol(tabId).orderBy('date', descending: true).get();
+    return qs.docs.map((d) => _fromCustomRecordDoc(d)).toList();
+  }
+
+  Future<String> addCustomTabRecord(String tabId, Map<String, dynamic> item, {String? withId}) async {
+    final data = _toCustomRecordDoc(item);
+    if (withId != null && withId.isNotEmpty) {
+      await _customTabRecordsCol(tabId).doc(withId).set(data, SetOptions(merge: true));
+      return withId;
+    }
+    final ref = await _customTabRecordsCol(tabId).add(data);
+    return ref.id;
+  }
+
+  Future<void> updateCustomTabRecord(String tabId, String id, Map<String, dynamic> item) async {
+    // Support receipt removal/ replacement.
+    final docRef = _customTabRecordsCol(tabId).doc(id);
+    String? oldReceiptUid;
+    try {
+      final existing = await docRef.get();
+      if (existing.exists) {
+        final data = existing.data();
+        if (data != null) {
+          oldReceiptUid = data['receiptUid']?.toString();
+        }
+      }
+    } catch (_) {}
+
+    final bool receiptRemoved = item['ReceiptRemoved'] == true && (item['ReceiptUid'] == null || (item['ReceiptUid'] as String).isEmpty);
+    final hasNewReceipt = item['ReceiptUid'] != null && (item['ReceiptUid'] as String).isNotEmpty && item['ReceiptUid'] != oldReceiptUid;
+
+    final updateData = _toCustomRecordDoc(item);
+    // If explicitly removed receipt and there was one before, delete local file & clear firestore fields.
+    if (receiptRemoved && oldReceiptUid != null && oldReceiptUid.isNotEmpty) {
+      try {
+        // Best-effort local cleanup
+        await LocalReceiptService().deleteReceipt(
+          accountId: accountId,
+          collection: 'custom_$tabId',
+          docId: oldReceiptUid,
+          receiptUid: oldReceiptUid,
+        );
+      } catch (_) {}
+      updateData['receiptUid'] = FieldValue.delete();
+      updateData['receiptUrl'] = FieldValue.delete();
+    }
+
+    // If new receipt different from old, optionally cleanup old local file
+    if (hasNewReceipt && oldReceiptUid != null && oldReceiptUid.isNotEmpty && oldReceiptUid != item['ReceiptUid']) {
+      try {
+        await LocalReceiptService().deleteReceipt(
+          accountId: accountId,
+          collection: 'custom_$tabId',
+          docId: oldReceiptUid,
+          receiptUid: oldReceiptUid,
+        );
+      } catch (_) {}
+    }
+
+    await docRef.set(updateData, SetOptions(merge: true));
+  }
+
+  Future<void> deleteCustomTabRecord(String tabId, String id) async {
+    final docRef = _customTabRecordsCol(tabId).doc(id);
+    String? receiptUid;
+    try {
+      final snap = await docRef.get();
+      if (snap.exists) {
+        final data = snap.data();
+        if (data != null) receiptUid = data['receiptUid']?.toString();
+      }
+    } catch (_) {}
+    try {
+      if (receiptUid != null && receiptUid.isNotEmpty) {
+        await LocalReceiptService().deleteReceipt(
+          accountId: accountId,
+          collection: 'custom_$tabId',
+          docId: receiptUid,
+          receiptUid: receiptUid,
+        );
+      }
+    } catch (_) {}
+    await docRef.delete();
+  }
+
+  // (Removed duplicate deleteCustomTab; transactional version earlier handles counter decrement & record deletion)
 
   // One-shot fetchers for backup/restore flows
   Future<List<Map<String, dynamic>>> fetchAllExpensesOnce() async {
@@ -318,12 +555,22 @@ class SharedAccountRepository {
     return qs.docs.map((d) => _fromDoc(d)).toList();
   }
 
+  Future<List<Map<String, dynamic>>> fetchAllOrOnce() async {
+    final qs = await _orCol.orderBy('date', descending: true).get();
+    return qs.docs.map((d) => _fromDoc(d)).toList();
+  }
+
   // Find Firestore doc id by a stored receiptUid (if present on row)
   Future<String?> findDocIdByReceiptUid({
     required String collection, // 'expenses' | 'savings'
     required String receiptUid,
   }) async {
-    final col = collection == 'expenses' ? _expensesCol : _savingsCol;
+    final col = switch (collection) {
+      'expenses' => _expensesCol,
+      'savings' => _savingsCol,
+      'or' => _orCol,
+      _ => _savingsCol, // fallback
+    };
     final qs = await col
         .where('receiptUid', isEqualTo: receiptUid)
         .limit(1)
@@ -363,12 +610,29 @@ class SharedAccountRepository {
     return ref.id;
   }
 
+  Future<String> addOr(Map<String, dynamic> item, {String? withId}) async {
+    if (withId != null && withId.isNotEmpty) {
+      await _orCol.doc(withId).set(_toDoc(item));
+      return withId;
+    }
+    final ref = await _orCol.add(_toDoc(item));
+    return ref.id;
+  }
+
   Future<void> updateSaving(String id, Map<String, dynamic> item) async {
     await _savingsCol.doc(id).set(_toDoc(item), SetOptions(merge: true));
   }
 
+  Future<void> updateOr(String id, Map<String, dynamic> item) async {
+    await _orCol.doc(id).set(_toDoc(item), SetOptions(merge: true));
+  }
+
   Future<void> deleteSaving(String id) async {
     await _savingsCol.doc(id).delete();
+  }
+
+  Future<void> deleteOr(String id) async {
+    await _orCol.doc(id).delete();
   }
 
   Future<String> addBill(Map<String, dynamic> item, {String? withId}) async {
@@ -426,6 +690,9 @@ class SharedAccountRepository {
       'Date': (data['date'] is Timestamp)
           ? (data['date'] as Timestamp).toDate().toIso8601String()
           : (data['date']?.toString() ?? ''),
+    'ValidUntil': (data['validUntil'] is Timestamp)
+      ? (data['validUntil'] as Timestamp).toDate().toIso8601String()
+      : (data['validUntil']?.toString() ?? ''),
       'Note': data['note'],
       // Receipts are large; store as URL in cloud storage ideally.
       'ReceiptUrl': data['receiptUrl'],
@@ -472,6 +739,8 @@ class SharedAccountRepository {
       'subcategory': item['Subcategory'],
       'amount': (item['Amount'] as num?)?.toDouble() ?? 0.0,
       'date': _parseDate(item['Date']),
+      if (item['ValidUntil'] != null && item['ValidUntil'].toString().isNotEmpty)
+        'validUntil': _parseDate(item['ValidUntil']),
       'note': item['Note'],
       'receiptUrl': item['ReceiptUrl'], // files should be uploaded separately
       // Persist stable receipt uid if present
@@ -493,6 +762,73 @@ class SharedAccountRepository {
       'note': item['Note'],
       'createdBy': uid,
       'updatedAt': FieldValue.serverTimestamp(),
+    };
+  }
+
+  Map<String, dynamic> _fromCustomTabDoc(DocumentSnapshot<Map<String, dynamic>> d) {
+    final data = d.data() ?? {};
+    return {
+      'id': d.id,
+      'title': data['title']?.toString() ?? 'Tab',
+      'order': (data['order'] as num?)?.toInt() ?? 0,
+      'createdBy': data['createdBy'],
+    'categories': (data['categories'] is List)
+      ? (data['categories'] as List)
+        .whereType<String>()
+        .toList()
+      : <String>[],
+    };
+  }
+
+  Map<String, dynamic> _toCustomTabDoc(Map<String, dynamic> item) {
+    return {
+      'title': item['title']?.toString() ?? 'Tab',
+      'order': (item['order'] as num?)?.toInt() ?? 0,
+      'createdBy': uid,
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      if (item['categories'] is List) 'categories': item['categories'],
+    };
+  }
+
+  Future<void> updateCustomTabCategories(String tabId, List<String> categories) async {
+    await _customTabsCol.doc(tabId).set({
+      'categories': categories.take(50).toList(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Map<String, dynamic> _fromCustomRecordDoc(DocumentSnapshot<Map<String, dynamic>> d) {
+    final data = d.data() ?? {};
+    return {
+      'id': d.id,
+      'Title': data['title']?.toString() ?? 'Untitled',
+  'Category': data['category']?.toString() ?? data['title']?.toString() ?? 'Untitled',
+      'Amount': (data['amount'] as num?)?.toDouble() ?? 0.0,
+      'Date': (data['date'] is Timestamp)
+          ? (data['date'] as Timestamp).toDate().toIso8601String()
+          : (data['date']?.toString() ?? ''),
+      'Note': data['note']?.toString() ?? '',
+      'CreatedBy': data['createdBy'],
+  'ReceiptUid': data['receiptUid'],
+  'ReceiptUrl': data['receiptUrl'],
+    };
+  }
+
+  Map<String, dynamic> _toCustomRecordDoc(Map<String, dynamic> item) {
+    return {
+      'title': item['Title'] ?? item['title'] ?? 'Untitled',
+  'category': item['Category'] ?? item['category'] ?? item['Title'] ?? item['title'] ?? 'Untitled',
+      'amount': (item['Amount'] as num?)?.toDouble() ?? (double.tryParse(item['amount']?.toString() ?? '') ?? 0.0),
+      'date': _parseDate(item['Date']),
+      'note': item['Note'] ?? item['note'],
+      'createdBy': uid,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+      if ((item['ReceiptUid'] ?? item['receiptUid']) != null)
+        'receiptUid': item['ReceiptUid'] ?? item['receiptUid'],
+      if ((item['ReceiptUrl'] ?? item['receiptUrl']) != null)
+        'receiptUrl': item['ReceiptUrl'] ?? item['receiptUrl'],
     };
   }
 

@@ -22,8 +22,14 @@ class ReceiptBackupService {
 
     final expenses = await repo.fetchAllExpensesOnce();
     final savings = await repo.fetchAllSavingsOnce();
+    List<Map<String, dynamic>> orRows = const [];
+    try {
+      orRows = await repo.fetchAllOrOnce();
+    } catch (_) {
+      // ignore if rules missing yet
+    }
 
-    final manifest = <String, Map<String, dynamic>>{}; // uid -> meta
+  final manifest = <String, Map<String, dynamic>>{}; // uid -> meta
 
     Future<void> addRow(String collection, Map<String, dynamic> row) async {
       final uid = (row['ReceiptUid'] ?? row['receiptUid'] ?? '').toString();
@@ -47,6 +53,7 @@ class ReceiptBackupService {
         'subcategory': row['Subcategory'],
         'amount': row['Amount'],
         'date': row['Date'],
+            'validUntil': row['ValidUntil'],
         'note': row['Note'],
       };
     }
@@ -54,8 +61,42 @@ class ReceiptBackupService {
     for (final r in expenses) {
       await addRow('expenses', r);
     }
-    for (final r in savings) {
-      await addRow('savings', r);
+  for (final r in savings) { await addRow('savings', r); }
+  for (final r in orRows) { await addRow('or', r); }
+
+    // Custom tabs: iterate tabs and include records
+    try {
+      final tabs = await repo.fetchAllCustomTabsOnce();
+      for (final t in tabs) {
+        final tabId = (t['id'] ?? '').toString();
+        if (tabId.isEmpty) continue;
+        final records = await repo.fetchAllCustomTabRecordsOnce(tabId);
+        for (final r in records) {
+          final uid = (r['ReceiptUid'] ?? '').toString();
+          if (uid.isEmpty) continue;
+          final src = await local.pathForReceiptUid(
+            accountId: accountId,
+            collection: 'custom_$tabId',
+            receiptUid: uid,
+          );
+          final srcFile = File(src);
+          if (await srcFile.exists()) {
+            final dest = File('${outDir.path}/custom_$tabId/$uid.jpg');
+            await dest.parent.create(recursive: true);
+            await srcFile.copy(dest.path);
+          }
+          manifest[uid] = {
+            'collection': 'custom_$tabId',
+            'docId': (r['id'] ?? '').toString(),
+            'title': r['Title'],
+            'amount': r['Amount'],
+            'date': r['Date'],
+            'note': r['Note'],
+          };
+        }
+      }
+    } catch (_) {
+      // best-effort; ignore if rules disallow listing or offline
     }
 
     final manifestFile = File('${outDir.path}/manifest.json');
@@ -79,9 +120,11 @@ class ReceiptBackupService {
       final uid = entry.key;
       final meta = entry.value as Map<String, dynamic>;
       final collection = (meta['collection'] ?? '').toString();
-      if (collection != 'expenses' && collection != 'savings') continue;
+  final isStd = collection == 'expenses' || collection == 'savings' || collection == 'or';
+  final isCustom = collection.startsWith('custom_');
+  if (!isStd && !isCustom) continue;
 
-      final file = File('${sourceDir.path}/$collection/$uid.jpg');
+  final file = File('${sourceDir.path}/$collection/$uid.jpg');
       if (!await file.exists()) {
         results.add({'receiptUid': uid, 'status': 'skipped_no_file'});
         continue;
