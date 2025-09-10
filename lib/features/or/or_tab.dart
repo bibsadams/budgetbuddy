@@ -27,6 +27,10 @@ class OrTab extends StatefulWidget {
 
 class _OrTabState extends State<OrTab> {
   String _sort = 'Date (newest)';
+  // Search state cloned from savings tab pattern
+  bool _searchExpanded = false;
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _query = '';
 
   List<Map<String, dynamic>> _sorted(List<Map<String, dynamic>> list) {
     int cmpDate(String a, String b) {
@@ -66,6 +70,27 @@ class _OrTabState extends State<OrTab> {
         );
     }
     return copy;
+  }
+
+  List<Map<String, dynamic>> _filteredAndSorted(
+    List<Map<String, dynamic>> list,
+  ) {
+    final base = _sorted(list);
+    if (_query.trim().isEmpty) return base;
+    final q = _query.toLowerCase();
+    return base.where((r) {
+      bool hit = false;
+      for (final key in ['Category', 'Note', 'ValidUntil']) {
+        final v = (r[key] ?? '').toString().toLowerCase();
+        if (v.contains(q)) {
+          hit = true;
+          break;
+        }
+      }
+      final amt = (r['Amount'] ?? '').toString();
+      if (!hit && amt.toLowerCase().contains(q)) hit = true;
+      return hit;
+    }).toList();
   }
 
   void _add() async {
@@ -160,7 +185,7 @@ class _OrTabState extends State<OrTab> {
   @override
   Widget build(BuildContext context) {
     final currency = NumberFormat.currency(symbol: '₱', decimalDigits: 2);
-    final rows = _sorted(widget.rows);
+    final rows = _filteredAndSorted(widget.rows);
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: AppGradientBackground(
@@ -169,43 +194,118 @@ class _OrTabState extends State<OrTab> {
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Expanded(
-                      child: Text(
-                        'Official Receipts',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w700,
+                    // Title + actions row
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Official Receipts',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                    PopupMenuButton<String>(
-                      tooltip: 'Sort',
-                      onSelected: (v) => setState(() => _sort = v),
-                      itemBuilder: (ctx) => const [
-                        PopupMenuItem(
-                          value: 'Date (newest)',
-                          child: Text('Date (newest)'),
+                        // Search icon
+                        PressableNeumorphic(
+                          borderRadius: 24,
+                          padding: const EdgeInsets.all(8),
+                          onTap: () => setState(() => _searchExpanded = true),
+                          child: const Icon(Icons.search),
                         ),
-                        PopupMenuItem(
-                          value: 'Date (oldest)',
-                          child: Text('Date (oldest)'),
-                        ),
-                        PopupMenuItem(
-                          value: 'Amount (high → low)',
-                          child: Text('Amount (high → low)'),
-                        ),
-                        PopupMenuItem(
-                          value: 'Amount (low → high)',
-                          child: Text('Amount (low → high)'),
+                        const SizedBox(width: 8),
+                        PopupMenuButton<String>(
+                          tooltip: 'Sort',
+                          onSelected: (v) => setState(() => _sort = v),
+                          itemBuilder: (ctx) => const [
+                            PopupMenuItem(
+                              value: 'Date (newest)',
+                              child: Text('Date (newest)'),
+                            ),
+                            PopupMenuItem(
+                              value: 'Date (oldest)',
+                              child: Text('Date (oldest)'),
+                            ),
+                            PopupMenuItem(
+                              value: 'Amount (high → low)',
+                              child: Text('Amount (high → low)'),
+                            ),
+                            PopupMenuItem(
+                              value: 'Amount (low → high)',
+                              child: Text('Amount (low → high)'),
+                            ),
+                          ],
+                          child: PressableNeumorphic(
+                            borderRadius: 24,
+                            padding: const EdgeInsets.all(8),
+                            child: const Icon(Icons.filter_list),
+                          ),
                         ),
                       ],
-                      child: PressableNeumorphic(
-                        borderRadius: 24,
-                        padding: const EdgeInsets.all(8),
-                        child: const Icon(Icons.filter_list),
+                    ),
+                    const SizedBox(height: 8),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 220),
+                      transitionBuilder: (child, anim) => FadeTransition(
+                        opacity: anim,
+                        child: ScaleTransition(
+                          scale: Tween<double>(
+                            begin: 0.95,
+                            end: 1.0,
+                          ).animate(anim),
+                          child: child,
+                        ),
                       ),
+                      child: _searchExpanded
+                          ? Container(
+                              key: const ValueKey('or-search-expanded'),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.surface.withValues(alpha: 0.6),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.search, size: 20),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: TextField(
+                                      controller: _searchCtrl,
+                                      autofocus: true,
+                                      decoration: const InputDecoration(
+                                        hintText: 'Search receipts…',
+                                        isDense: true,
+                                        border: InputBorder.none,
+                                      ),
+                                      onChanged: (v) =>
+                                          setState(() => _query = v),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Clear',
+                                    icon: const Icon(Icons.close, size: 20),
+                                    onPressed: () {
+                                      setState(() {
+                                        _searchCtrl.clear();
+                                        _query = '';
+                                        _searchExpanded = false;
+                                      });
+                                    },
+                                  ),
+                                ],
+                              ),
+                            )
+                          : const SizedBox.shrink(
+                              key: ValueKey('or-search-collapsed'),
+                            ),
                     ),
                   ],
                 ),
