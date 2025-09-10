@@ -433,10 +433,11 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
       for (final r in expenses + savings) {
         final d = r['Date'];
         DateTime? dt;
-        if (d is DateTime)
+        if (d is DateTime) {
           dt = d;
-        else if (d is String)
+        } else if (d is String) {
           dt = DateTime.tryParse(d);
+        }
         if (dt != null) years.add(dt.year);
       }
       final list = years.toList()..sort();

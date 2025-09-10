@@ -1230,8 +1230,9 @@ class _ReportTabState extends State<ReportTab> {
         DateTime? dt;
         if (dv is DateTime) {
           dt = dv;
-        } else if (dv is String)
+        } else if (dv is String) {
           dt = DateTime.tryParse(dv);
+        }
         if (dt == null) continue;
         if (selectedMonth != 0 && dt.month != selectedMonth) {
           continue; // month filter across all years
@@ -1302,8 +1303,9 @@ class _ReportTabState extends State<ReportTab> {
         DateTime? dt;
         if (dv is DateTime) {
           dt = dv;
-        } else if (dv is String)
+        } else if (dv is String) {
           dt = DateTime.tryParse(dv);
+        }
         if (dt == null) continue;
         if (selectedMonth != 0 && dt.month != selectedMonth) {
           continue; // month filter
@@ -1690,8 +1692,9 @@ class SavingsRecordsListPage extends StatelessWidget {
     DateTime? dt;
     if (dv is DateTime) {
       dt = dv;
-    } else if (dv is String)
+    } else if (dv is String) {
       dt = DateTime.tryParse(dv);
+    }
     if (dt == null) return '';
     return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
   }
@@ -1769,8 +1772,9 @@ class ExpensesRecordsListPage extends StatelessWidget {
     DateTime? dt;
     if (dv is DateTime) {
       dt = dv;
-    } else if (dv is String)
+    } else if (dv is String) {
       dt = DateTime.tryParse(dv);
+    }
     if (dt == null) return '';
     return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
   }

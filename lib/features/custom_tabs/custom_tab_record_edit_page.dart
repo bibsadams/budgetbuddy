@@ -300,12 +300,14 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
             out,
           );
           out['id'] = newId;
+          out['_persisted'] = true; // signal host that cloud write already done
         } else {
           await widget.repo!.updateCustomTabRecord(
             widget.tabId,
             widget.record['id'] as String,
             out,
           );
+          out['_persisted'] = true;
         }
       }
     } catch (e) {

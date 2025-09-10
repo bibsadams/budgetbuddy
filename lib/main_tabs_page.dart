@@ -2160,9 +2160,13 @@ class _MainTabsPageState extends State<MainTabsPage> {
                           final arr = setList.toList();
                           final linkedKey = 'linkedAccounts_${user.uid}';
                           box.put(linkedKey, arr);
-                          if (mounted) setState(() => _linkedAccounts = arr);
-                          if (mounted) Navigator.of(ctx).pop();
-                          if (mounted)
+                          if (mounted) {
+                            setState(() => _linkedAccounts = arr);
+                          }
+                          if (mounted) {
+                            Navigator.of(ctx).pop();
+                          }
+                          if (mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
                                 content: Text(
@@ -2170,6 +2174,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
                                 ),
                               ),
                             );
+                          }
                           return;
                         }
 

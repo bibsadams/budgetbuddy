@@ -82,14 +82,21 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
     final cs = Theme.of(context).colorScheme;
     final t = (title ?? '').toLowerCase();
     Color adjust(Color c) => c;
-    if (t.contains('food') || t.contains('meal'))
+    if (t.contains('food') || t.contains('meal')) {
       return adjust(cs.primaryContainer);
-    if (t.contains('travel') || t.contains('trip') || t.contains('flight'))
+    }
+    if (t.contains('travel') || t.contains('trip') || t.contains('flight')) {
       return adjust(cs.tertiaryContainer);
-    if (t.contains('save') || t.contains('deposit'))
+    }
+    if (t.contains('save') || t.contains('deposit')) {
       return adjust(cs.secondaryContainer);
-    if (t.contains('gift')) return adjust(cs.surfaceContainerHigh);
-    if (t.contains('tax')) return adjust(cs.errorContainer);
+    }
+    if (t.contains('gift')) {
+      return adjust(cs.surfaceContainerHigh);
+    }
+    if (t.contains('tax')) {
+      return adjust(cs.errorContainer);
+    }
     // Hash fallback for variety
     final hash = t.hashCode;
     final variants = [
@@ -103,16 +110,27 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
 
   IconData _recordIcon(String? title) {
     final t = (title ?? '').toLowerCase();
-    if (t.contains('food') || t.contains('meal'))
+    if (t.contains('food') || t.contains('meal')) {
       return Icons.fastfood_outlined;
-    if (t.contains('travel') || t.contains('trip') || t.contains('flight'))
+    }
+    if (t.contains('travel') || t.contains('trip') || t.contains('flight')) {
       return Icons.flight_takeoff_outlined;
-    if (t.contains('save') || t.contains('deposit'))
+    }
+    if (t.contains('save') || t.contains('deposit')) {
       return Icons.savings_outlined;
-    if (t.contains('gift')) return Icons.card_giftcard_outlined;
-    if (t.contains('tax')) return Icons.receipt_long_outlined;
-    if (t.contains('rent')) return Icons.home_outlined;
-    if (t.contains('car')) return Icons.directions_car_outlined;
+    }
+    if (t.contains('gift')) {
+      return Icons.card_giftcard_outlined;
+    }
+    if (t.contains('tax')) {
+      return Icons.receipt_long_outlined;
+    }
+    if (t.contains('rent')) {
+      return Icons.home_outlined;
+    }
+    if (t.contains('car')) {
+      return Icons.directions_car_outlined;
+    }
     return Icons.label_outline;
   }
 
@@ -129,6 +147,8 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
       ),
     );
     if (result != null) {
+      // If the edit page already persisted (_persisted flag), rely on stream update.
+      if (result['_persisted'] == true) return;
       try {
         if (_repo != null) {
           await _repo!.addCustomTabRecord(widget.tabId, result);
@@ -209,7 +229,9 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
           return;
         }
         try {
-          if (_repo != null && (r['id'] as String?) != null) {
+          if (updated['_persisted'] == true) {
+            // Already saved; rely on stream
+          } else if (_repo != null && (r['id'] as String?) != null) {
             await _repo!.updateCustomTabRecord(
               widget.tabId,
               r['id'] as String,
