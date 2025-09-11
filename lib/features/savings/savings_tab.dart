@@ -76,6 +76,18 @@ class _SavingsTabState extends State<SavingsTab> {
           date.contains(q);
     }).toList();
 
+    // Apply period date filtering unless showing all_savings
+    if (_period != 'all_savings') {
+      final (start, end) = _getPeriodRange(_period);
+      list = list.where((r) {
+        final ds = (r['Date'] ?? '').toString();
+        if (ds.isEmpty) return false;
+        final dt = DateTime.tryParse(ds);
+        if (dt == null) return false;
+        return !dt.isBefore(start) && dt.isBefore(end);
+      }).toList();
+    }
+
     int cmpNum(num a, num b) => a.compareTo(b);
     int cmpDate(String a, String b) {
       final da = DateTime.tryParse(a);
@@ -848,7 +860,9 @@ Widget _savingsReceiptThumb(Map<String, dynamic> row) {
     PaintingBinding.instance.imageCache.evict(FileImage(f));
     child = Image.file(
       f,
-      key: ValueKey('file-${row['id']}-${stat.modified.millisecondsSinceEpoch}'),
+      key: ValueKey(
+        'file-${row['id']}-${stat.modified.millisecondsSinceEpoch}',
+      ),
       width: 64,
       height: 64,
       fit: BoxFit.cover,

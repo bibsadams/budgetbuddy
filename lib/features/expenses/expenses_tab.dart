@@ -156,6 +156,18 @@ class _ExpensesTabState extends State<ExpensesTab> {
     final list = List<Map<String, dynamic>>.from(widget.rows);
     final q = _query.trim().toLowerCase();
     Iterable<Map<String, dynamic>> it = list;
+    // Apply period date filtering first (except for all_expenses which shows everything)
+    if (_period != 'all_expenses') {
+      final (start, end) = _getPeriodRange(_period);
+      it = it.where((r) {
+        final ds = (r['Date'] ?? '').toString();
+        if (ds.isEmpty)
+          return false; // no date, exclude from period-specific view
+        final dt = DateTime.tryParse(ds);
+        if (dt == null) return false;
+        return !dt.isBefore(start) && dt.isBefore(end);
+      });
+    }
     if (q.isNotEmpty) {
       it = it.where((r) {
         final cat = (r['Category'] ?? '').toString().toLowerCase();
@@ -1157,7 +1169,13 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
       // Extra helpful category
       'Health': ['Medicine', 'Checkup', 'Dental', 'Insurance'],
       // Newly requested Food category with fixed subcategories
-      'Food': ['Restaurant', 'Food Stall', 'Street Food', 'Coffee Shop', 'Palengke'],
+      'Food': [
+        'Restaurant',
+        'Food Stall',
+        'Street Food',
+        'Coffee Shop',
+        'Palengke',
+      ],
     };
 
     bool changed = false;
