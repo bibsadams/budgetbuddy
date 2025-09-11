@@ -673,7 +673,9 @@ class _ExpensesTabState extends State<ExpensesTab> {
       PaintingBinding.instance.imageCache.evict(FileImage(f));
       return Image.file(
         f,
-        key: ValueKey('file-${row['id']}-${stat.modified.millisecondsSinceEpoch}'),
+        key: ValueKey(
+          'file-${row['id']}-${stat.modified.millisecondsSinceEpoch}',
+        ),
         width: 64,
         height: 64,
         fit: BoxFit.cover,
@@ -1155,7 +1157,7 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
       // Extra helpful category
       'Health': ['Medicine', 'Checkup', 'Dental', 'Insurance'],
       // Newly requested Food category with fixed subcategories
-      'Food': ['Restaurant', 'Food Stall', 'Street Food', 'Coffee Shop'],
+      'Food': ['Restaurant', 'Food Stall', 'Street Food', 'Coffee Shop', 'Palengke'],
     };
 
     bool changed = false;
@@ -1185,12 +1187,9 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
 
     selectedCategory = (widget.expense['Category'] ?? '') as String?;
     selectedSubcategory = (widget.expense['Subcategory'] ?? '') as String?;
-    // If creating a brand-new expense (empty category), default to Food
-    if ((selectedCategory == null || selectedCategory!.isEmpty) &&
-        categoriesMap.containsKey('Food')) {
-      selectedCategory = 'Food';
-      // Leave subcategory unselected so user chooses; could also pick first option if desired
-      selectedSubcategory = null;
+    // Do NOT auto-select a default category; user must choose explicitly.
+    if (selectedCategory != null && selectedCategory!.isEmpty) {
+      selectedCategory = null; // normalize empty string to null
     }
     // Pre-format amount if present
     String amtText = '';
@@ -1504,6 +1503,7 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                           prefixIcon: Icon(Icons.category_outlined),
                           border: OutlineInputBorder(),
                         ),
+                        hint: const Text('Select category'),
                         items: categoriesMap.keys
                             .map<DropdownMenuItem<String>>(
                               (cat) => DropdownMenuItem(
