@@ -1328,7 +1328,7 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
                   leading: const Icon(Icons.photo_library_outlined),
                   title: const Text('Pick from Gallery'),
                   onTap: () async {
-                    Navigator.pop(ctx);
+                    Navigator.of(ctx).pop();
                     await _pickImage(ImageSource.gallery);
                   },
                 ),
@@ -1336,7 +1336,7 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
                   leading: const Icon(Icons.photo_camera_outlined),
                   title: const Text('Take a Photo'),
                   onTap: () async {
-                    Navigator.pop(ctx);
+                    Navigator.of(ctx).pop();
                     await _pickImage(ImageSource.camera);
                   },
                 ),
@@ -1351,7 +1351,7 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
   Future<void> _addNewCategory() async {
     String? newCat = await showDialog<String>(
       context: context,
-      builder: (context) {
+      builder: (d) {
         final controller = TextEditingController();
         return AlertDialog(
           title: const Text("Add New Category"),
@@ -1362,13 +1362,13 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => Navigator.of(d).pop(),
               child: const Text("Cancel"),
             ),
             TextButton(
               onPressed: () {
                 if (controller.text.trim().isNotEmpty) {
-                  Navigator.pop(context, controller.text.trim());
+                  Navigator.of(d).pop(controller.text.trim());
                 }
               },
               child: const Text("Add"),
@@ -1391,7 +1391,7 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
     if (selectedCategory == null) return;
     String? newSub = await showDialog<String>(
       context: context,
-      builder: (context) {
+      builder: (d) {
         final controller = TextEditingController();
         return AlertDialog(
           title: const Text("Add New Subcategory"),
@@ -1402,13 +1402,13 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => Navigator.of(d).pop(),
               child: const Text("Cancel"),
             ),
             TextButton(
               onPressed: () {
                 if (controller.text.trim().isNotEmpty) {
-                  Navigator.pop(context, controller.text.trim());
+                  Navigator.of(d).pop(controller.text.trim());
                 }
               },
               child: const Text("Add"),
@@ -1485,7 +1485,7 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
                     Expanded(
                       child: DropdownButtonFormField<String>(
                         isExpanded: true,
-                        value: selectedCategory,
+                        initialValue: selectedCategory,
                         decoration: const InputDecoration(
                           labelText: 'Category',
                           prefixIcon: Icon(Icons.category_outlined),
@@ -1531,7 +1531,8 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
                       Expanded(
                         child: DropdownButtonFormField<String>(
                           isExpanded: true,
-                          value: subcategories.contains(selectedSubcategory)
+                          initialValue:
+                              subcategories.contains(selectedSubcategory)
                               ? selectedSubcategory
                               : null,
                           decoration: const InputDecoration(

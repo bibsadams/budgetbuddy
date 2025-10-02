@@ -12,6 +12,7 @@ import 'package:image/image.dart' as img;
 import 'package:budgetbuddy/widgets/pressable_neumorphic.dart';
 import 'package:budgetbuddy/widgets/app_gradient_background.dart';
 import 'package:budgetbuddy/services/notification_service.dart';
+import 'package:budgetbuddy/features/expenses/receipt_gallery_page.dart';
 
 class ExpensesTab extends StatefulWidget {
   final List<Map<String, dynamic>> rows;
@@ -152,6 +153,28 @@ class _ExpensesTabState extends State<ExpensesTab> {
 
   // _sumFor helper removed (no longer used)
 
+  // Parse a DateTime from known string formats or return a minimal sentinel.
+  DateTime _parseDateFlexible(Object? v) {
+    if (v is DateTime) return v;
+    final s = (v ?? '').toString();
+    if (s.isEmpty) return DateTime(1900);
+    // DateTime.tryParse handles both "yyyy-MM-dd HH:mm" and ISO8601 with 'T'
+    return DateTime.tryParse(s) ?? DateTime(1900);
+  }
+
+  // Best-effort created-time fallback to break ties when dates are equal:
+  // - If id starts with local_ use its millisecond timestamp part
+  // - Else return 0 so it won't affect ordering unless both are 0
+  int _createdMillisFallback(Map<String, dynamic> r) {
+    final id = (r['id'] ?? '').toString();
+    if (id.startsWith('local_')) {
+      final tail = id.substring(6);
+      final n = int.tryParse(tail);
+      if (n != null) return n;
+    }
+    return 0;
+  }
+
   List<Map<String, dynamic>> _filteredAndSorted() {
     final list = List<Map<String, dynamic>>.from(widget.rows);
     final q = _query.trim().toLowerCase();
@@ -161,8 +184,9 @@ class _ExpensesTabState extends State<ExpensesTab> {
       final (start, end) = _getPeriodRange(_period);
       it = it.where((r) {
         final ds = (r['Date'] ?? '').toString();
-        if (ds.isEmpty)
+        if (ds.isEmpty) {
           return false; // no date, exclude from period-specific view
+        }
         final dt = DateTime.tryParse(ds);
         if (dt == null) return false;
         return !dt.isBefore(start) && dt.isBefore(end);
@@ -185,9 +209,7 @@ class _ExpensesTabState extends State<ExpensesTab> {
     final list2 = it.toList();
     int cmpNumDesc(num a, num b) => (b - a).sign.toInt();
     int cmpNumAsc(num a, num b) => (a - b).sign.toInt();
-    DateTime parseDate(Object? v) => v is DateTime
-        ? v
-        : (DateTime.tryParse((v ?? '').toString()) ?? DateTime(1900));
+    DateTime parseDate(Object? v) => _parseDateFlexible(v);
     switch (_sort) {
       case 'Date (oldest)':
         list2.sort(
@@ -222,9 +244,21 @@ class _ExpensesTabState extends State<ExpensesTab> {
         break;
       default:
         // Date (newest)
-        list2.sort(
-          (a, b) => parseDate(b['Date']).compareTo(parseDate(a['Date'])),
-        );
+        list2.sort((a, b) {
+          final ad = parseDate(a['Date']);
+          final bd = parseDate(b['Date']);
+          final cmp = bd.compareTo(ad); // newest first
+          if (cmp != 0) return cmp;
+          // Tie-breaker by created millis (newest first) to stabilize order
+          final ac = _createdMillisFallback(a);
+          final bc = _createdMillisFallback(b);
+          final cmpCreated = bc.compareTo(ac);
+          if (cmpCreated != 0) return cmpCreated;
+          // Final fallback: stable string compare on id (descending) to avoid flicker
+          final aid = (a['id'] ?? '').toString();
+          final bid = (b['id'] ?? '').toString();
+          return bid.compareTo(aid);
+        });
     }
     return list2;
   }
@@ -551,6 +585,7 @@ class _ExpensesTabState extends State<ExpensesTab> {
             MaterialPageRoute(
               builder: (_) => ExpenseDetailsPage(
                 expense: row,
+                allRows: widget.rows,
                 onEdit: (updatedExpense) {
                   final newRows = List<Map<String, dynamic>>.from(widget.rows);
                   newRows[index] = {
@@ -926,20 +961,36 @@ class _PressableScaleState extends State<PressableScale> {
 // Glassmorphism container: frosted glass look with blur + translucent gradient
 // Local glass/pillow duplicates removed; using shared widgets instead.
 
-class ExpenseDetailsPage extends StatelessWidget {
+class ExpenseDetailsPage extends StatefulWidget {
   final Map<String, dynamic> expense;
+  final List<Map<String, dynamic>> allRows;
   final void Function(Map<String, dynamic> updatedExpense) onEdit;
   final VoidCallback onDelete;
 
   const ExpenseDetailsPage({
     super.key,
     required this.expense,
+    required this.allRows,
     required this.onEdit,
     required this.onDelete,
   });
 
   @override
+  State<ExpenseDetailsPage> createState() => _ExpenseDetailsPageState();
+}
+
+class _ExpenseDetailsPageState extends State<ExpenseDetailsPage> {
+  late Map<String, dynamic> _expense;
+
+  @override
+  void initState() {
+    super.initState();
+    _expense = Map<String, dynamic>.from(widget.expense);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final expense = _expense;
     final currency = NumberFormat.currency(symbol: '₱', decimalDigits: 2);
     return AppGradientBackground(
       child: Scaffold(
@@ -958,7 +1009,7 @@ class ExpenseDetailsPage extends StatelessWidget {
           title: const Text('Expense Details'),
           actions: [
             IconButton(
-              icon: const Icon(Icons.edit, size: 32),
+              icon: const Icon(Icons.edit, size: 28),
               tooltip: 'Edit',
               onPressed: () async {
                 final updatedExpense =
@@ -969,12 +1020,19 @@ class ExpenseDetailsPage extends StatelessWidget {
                       ),
                     );
                 if (updatedExpense != null) {
-                  onEdit(updatedExpense);
+                  setState(() {
+                    _expense = {
+                      ..._expense,
+                      ...updatedExpense,
+                      'id': _expense['id'] ?? updatedExpense['id'],
+                    };
+                  });
+                  widget.onEdit(_expense);
                 }
               },
             ),
             IconButton(
-              icon: const Icon(Icons.delete, size: 32),
+              icon: const Icon(Icons.delete, size: 28),
               tooltip: 'Delete',
               onPressed: () {
                 showDialog(
@@ -991,7 +1049,7 @@ class ExpenseDetailsPage extends StatelessWidget {
                       ),
                       TextButton(
                         onPressed: () {
-                          onDelete();
+                          widget.onDelete();
                           Navigator.pop(context);
                         },
                         child: const Text(
@@ -1040,44 +1098,97 @@ class ExpenseDetailsPage extends StatelessWidget {
               _buildDetailRow('Note', expense['Note'] ?? ''),
               const SizedBox(height: 32),
               Center(
-                child: Builder(
-                  builder: (context) {
-                    final localPath =
-                        (expense['LocalReceiptPath'] ?? '') as String;
-                    final url = (expense['ReceiptUrl'] ?? '') as String;
-                    if (localPath.isNotEmpty) {
-                      return ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: Image.file(
-                          File(localPath),
-                          width: MediaQuery.of(context).size.width * 0.9,
-                          height: MediaQuery.of(context).size.height * 0.5,
-                          fit: BoxFit.contain,
-                        ),
-                      );
-                    } else if (url.isNotEmpty) {
-                      return ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: Image.network(
-                          url,
-                          width: MediaQuery.of(context).size.width * 0.9,
-                          height: MediaQuery.of(context).size.height * 0.5,
-                          fit: BoxFit.contain,
-                        ),
-                      );
-                    } else if (expense['Receipt'] != null) {
-                      return ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: Image.memory(
-                          expense['Receipt'],
-                          width: MediaQuery.of(context).size.width * 0.9,
-                          height: MediaQuery.of(context).size.height * 0.5,
-                          fit: BoxFit.contain,
-                        ),
-                      );
-                    }
-                    return const SizedBox.shrink();
-                  },
+                child: Column(
+                  children: [
+                    Builder(
+                      builder: (context) {
+                        final localPath =
+                            (expense['LocalReceiptPath'] ?? '') as String;
+                        final url = (expense['ReceiptUrl'] ?? '') as String;
+                        if (localPath.isNotEmpty) {
+                          try {
+                            PaintingBinding.instance.imageCache.evict(
+                              FileImage(File(localPath)),
+                            );
+                          } catch (_) {}
+                          return ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: Image.file(
+                              File(localPath),
+                              width: MediaQuery.of(context).size.width * 0.9,
+                              height: MediaQuery.of(context).size.height * 0.4,
+                              fit: BoxFit.contain,
+                            ),
+                          );
+                        } else if (url.isNotEmpty) {
+                          return ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: Image.network(
+                              url,
+                              width: MediaQuery.of(context).size.width * 0.9,
+                              height: MediaQuery.of(context).size.height * 0.4,
+                              fit: BoxFit.contain,
+                            ),
+                          );
+                        } else if (expense['Receipt'] != null) {
+                          return ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
+                            child: Image.memory(
+                              expense['Receipt'],
+                              width: MediaQuery.of(context).size.width * 0.9,
+                              height: MediaQuery.of(context).size.height * 0.4,
+                              fit: BoxFit.contain,
+                            ),
+                          );
+                        }
+                        return const SizedBox.shrink();
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        // Open the receipt gallery showing all available images for this expense.
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => ReceiptGalleryPage(
+                              rows: [expense],
+                              // Only resolve uids for the current expense. Passing
+                              // `allRows` here caused the gallery to include images
+                              // from other records (shown as many extra images).
+                              resolveRows: [expense],
+                              onEdit: (updated) async {
+                                // Persist lightweight updates from gallery (delete, metadata changes)
+                                final merged = {
+                                  ..._expense,
+                                  ...updated,
+                                  'id': _expense['id'] ?? updated['id'],
+                                };
+                                setState(() => _expense = merged);
+                                widget.onEdit(merged);
+                              },
+                              onReplace: (updated) async {
+                                final merged = {
+                                  ..._expense,
+                                  ...updated,
+                                  'id': _expense['id'] ?? updated['id'],
+                                };
+                                setState(() => _expense = merged);
+                                try {
+                                  debugPrint(
+                                    'expenses_tab: onReplace merged keys=${merged.keys}',
+                                  );
+                                } catch (_) {}
+                                // Persist to parent, but do NOT pop this page.
+                                widget.onEdit(merged);
+                              },
+                            ),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.photo_library_outlined),
+                      label: const Text('View receipt(s)'),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -1125,9 +1236,14 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
   final FocusNode _amountFocus = FocusNode();
   late TextEditingController dateController;
   late TextEditingController noteController;
+  // Legacy single-image fields (kept for backward compatibility)
   Uint8List? receipt;
   String? localPath;
   String? receiptUrl;
+  // New plural image support
+  List<Uint8List> receipts = [];
+  List<String> receiptUrls = [];
+  List<String> receiptUids = [];
 
   String? selectedCategory;
   String? selectedSubcategory;
@@ -1219,11 +1335,46 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
     dateController = TextEditingController(text: widget.expense['Date'] ?? '');
     noteController = TextEditingController(text: widget.expense['Note'] ?? '');
     // Initialize possible receipt sources
-    receipt = widget.expense['Receipt'];
+    // Plural in-memory receipts take priority if present
+    if (widget.expense['ReceiptBytes'] is List) {
+      try {
+        receipts = List<Uint8List>.from(widget.expense['ReceiptBytes'] as List);
+      } catch (_) {
+        // Fallback to empty on type issues
+        receipts = [];
+      }
+      if (receipts.isNotEmpty) {
+        receipt = receipts.first; // legacy first image
+      } else {
+        receipt = widget.expense['Receipt'];
+      }
+    } else {
+      // Legacy single image
+      receipt = widget.expense['Receipt'];
+      if (receipt != null) receipts = [receipt!];
+    }
+
+    // Existing file/url based sources (preserved unless user removes)
     final lp = (widget.expense['LocalReceiptPath'] ?? '') as String;
     localPath = lp.isNotEmpty ? lp : null;
     final ru = (widget.expense['ReceiptUrl'] ?? '') as String;
     receiptUrl = ru.isNotEmpty ? ru : null;
+
+    // Plural urls/uids (preserve if exist)
+    if (widget.expense['ReceiptUrls'] is List) {
+      try {
+        receiptUrls = (widget.expense['ReceiptUrls'] as List)
+            .whereType<String>()
+            .toList();
+      } catch (_) {}
+    }
+    if (widget.expense['ReceiptUids'] is List) {
+      try {
+        receiptUids = (widget.expense['ReceiptUids'] as List)
+            .whereType<String>()
+            .toList();
+      } catch (_) {}
+    }
     if (!categoriesMap.containsKey(selectedCategory)) {
       selectedCategory = null;
       selectedSubcategory = null;
@@ -1325,6 +1476,22 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
 
   Future<void> _pickImage(ImageSource source) async {
     final picker = ImagePicker();
+    if (source == ImageSource.gallery) {
+      // Try to pick multiple images from gallery
+      final pickedFiles = await picker.pickMultiImage(imageQuality: 85);
+      if (pickedFiles.isEmpty) return;
+      final loaded = <Uint8List>[];
+      for (final p in pickedFiles) {
+        final b = await p.readAsBytes();
+        loaded.add(b);
+      }
+      setState(() {
+        // Append new selections; do NOT clear existing sources (append semantics)
+        receipts.addAll(loaded);
+        if (receipts.isNotEmpty) receipt = receipts.first;
+      });
+      return;
+    }
     final pickedFile = await picker.pickImage(source: source, imageQuality: 85);
     if (pickedFile == null) return;
     final bytes = await pickedFile.readAsBytes();
@@ -1337,19 +1504,19 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
           final resized = img.copyResize(decoded, width: maxW);
           final jpg = img.encodeJpg(resized, quality: 85);
           setState(() {
-            receipt = Uint8List.fromList(jpg);
-            // If user attaches a new image, clear path/url references
-            localPath = null;
-            receiptUrl = null;
+            // Append new camera capture; preserve existing sources
+            final data = Uint8List.fromList(jpg);
+            receipts.add(data);
+            receipt = receipts.first;
           });
           return;
         }
       }
     } catch (_) {}
     setState(() {
-      receipt = bytes;
-      localPath = null;
-      receiptUrl = null;
+      // Append as-is; preserve existing sources
+      receipts.add(bytes);
+      receipt = receipts.first;
     });
   }
 
@@ -1364,12 +1531,12 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
             ListTile(
               leading: const Icon(Icons.photo_library_outlined),
               title: const Text('Pick from gallery'),
-              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              onTap: () => Navigator.of(ctx).pop(ImageSource.gallery),
             ),
             ListTile(
               leading: const Icon(Icons.photo_camera_outlined),
               title: const Text('Take a photo'),
-              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              onTap: () => Navigator.of(ctx).pop(ImageSource.camera),
             ),
           ],
         ),
@@ -1393,13 +1560,13 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () => Navigator.of(ctx).pop(),
             child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () {
               final v = controller.text.trim();
-              if (v.isNotEmpty) Navigator.pop(ctx, v);
+              if (v.isNotEmpty) Navigator.of(ctx).pop(v);
             },
             child: const Text('Add'),
           ),
@@ -1435,13 +1602,13 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
+            onPressed: () => Navigator.of(ctx).pop(),
             child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () {
               final v = controller.text.trim();
-              if (v.isNotEmpty) Navigator.pop(ctx, v);
+              if (v.isNotEmpty) Navigator.of(ctx).pop(v);
             },
             child: const Text('Add'),
           ),
@@ -1515,7 +1682,7 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                     Expanded(
                       child: DropdownButtonFormField<String>(
                         isExpanded: true,
-                        value: selectedCategory,
+                        initialValue: selectedCategory,
                         decoration: const InputDecoration(
                           labelText: 'Category',
                           prefixIcon: Icon(Icons.category_outlined),
@@ -1556,7 +1723,8 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                       Expanded(
                         child: DropdownButtonFormField<String>(
                           isExpanded: true,
-                          value: subcategories.contains(selectedSubcategory)
+                          initialValue:
+                              subcategories.contains(selectedSubcategory)
                               ? selectedSubcategory
                               : null,
                           decoration: const InputDecoration(
@@ -1706,9 +1874,18 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                 Builder(
                   builder: (ctx) {
                     Widget? imgWidget;
-                    if (receipt != null) {
+                    Uint8List? firstBytes = receipts.isNotEmpty
+                        ? receipts.first
+                        : receipt;
+                    final firstLocal = (localPath ?? '').isNotEmpty
+                        ? localPath
+                        : null;
+                    final firstNet = (receiptUrl ?? '').isNotEmpty
+                        ? receiptUrl
+                        : null;
+                    if (firstBytes != null) {
                       imgWidget = Image.memory(
-                        receipt!,
+                        firstBytes,
                         width: MediaQuery.of(context).size.width * 0.9,
                         height: MediaQuery.of(context).size.height * 0.4,
                         fit: BoxFit.cover,
@@ -1719,25 +1896,48 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                           child: const Icon(Icons.broken_image, size: 48),
                         ),
                       );
-                    } else if ((localPath ?? '').isNotEmpty) {
+                    } else if (firstLocal != null) {
                       imgWidget = Image.file(
-                        File(localPath!),
+                        File(firstLocal),
                         width: MediaQuery.of(context).size.width * 0.9,
                         height: MediaQuery.of(context).size.height * 0.4,
                         fit: BoxFit.cover,
                       );
-                    } else if ((receiptUrl ?? '').isNotEmpty) {
+                    } else if (firstNet != null) {
                       imgWidget = Image.network(
-                        receiptUrl!,
+                        firstNet,
                         width: MediaQuery.of(context).size.width * 0.9,
                         height: MediaQuery.of(context).size.height * 0.4,
                         fit: BoxFit.cover,
                       );
                     }
                     if (imgWidget == null) return const SizedBox.shrink();
-                    return ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: imgWidget,
+                    return Stack(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: imgWidget,
+                        ),
+                        if (receipts.length > 1)
+                          Positioned(
+                            right: 8,
+                            top: 8,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black54,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(
+                                '+${receipts.length - 1}',
+                                style: const TextStyle(color: Colors.white),
+                              ),
+                            ),
+                          ),
+                      ],
                     );
                   },
                 ),
@@ -1749,21 +1949,26 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
                       onPressed: _showImageSourceSheet,
                       icon: const Icon(Icons.attachment_outlined),
                       label: Text(
-                        (receipt == null &&
+                        (receipts.isEmpty &&
                                 (localPath ?? '').isEmpty &&
                                 (receiptUrl ?? '').isEmpty)
-                            ? 'Attach Receipt'
-                            : 'Change Receipt',
+                            ? 'Attach Receipt(s)'
+                            : 'Add Receipt(s)',
                       ),
                     ),
-                    if (receipt != null ||
+                    if (receipts.isNotEmpty ||
                         (localPath ?? '').isNotEmpty ||
-                        (receiptUrl ?? '').isNotEmpty)
+                        (receiptUrl ?? '').isNotEmpty ||
+                        receiptUrls.isNotEmpty ||
+                        receiptUids.isNotEmpty)
                       OutlinedButton.icon(
                         onPressed: () => setState(() {
+                          receipts.clear();
                           receipt = null;
                           localPath = null;
                           receiptUrl = null;
+                          receiptUrls.clear();
+                          receiptUids.clear();
                         }),
                         icon: const Icon(Icons.delete_outline),
                         label: const Text('Remove'),
@@ -1811,26 +2016,52 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
       return;
     }
 
-    final updatedExpense = {
+    // Ensure Date has a value (fallback to now) so period filters include this row
+    if (dateController.text.trim().isEmpty) {
+      final now = DateTime.now();
+      dateController.text =
+          "${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+    }
+
+    // Build the updated map using append semantics. We preserve existing
+    // LocalReceiptPath/ReceiptUrl/Urls/Uids unless the user explicitly removed them.
+    final updatedExpense = <String, dynamic>{
       'Category': selectedCategory ?? '',
       'Subcategory': selectedSubcategory ?? '',
       'Amount': amountVal,
       'Date': dateController.text,
       'Note': noteController.text,
-      'Receipt': receipt,
-      // If user picked a new image (in-memory), clear path/url so details uses new bytes
-      if (receipt != null) 'LocalReceiptPath': null,
-      if (receipt != null) 'ReceiptUrl': '',
-      // If user removed all sources, ensure all fields are cleared
-      if (receipt == null &&
-          (localPath ?? '').isEmpty &&
-          (receiptUrl ?? '').isEmpty) ...{
-        'LocalReceiptPath': null,
-        'ReceiptUrl': '',
-      },
-      // Bubble through any existing id so the caller updates in place
-      'id': widget.expense['id'],
+      // Legacy single receipt (first image)
+      'Receipt': receipts.isNotEmpty ? receipts.first : null,
+      // Plural in-memory receipts (all appended)
+      'ReceiptBytes': receipts,
+      // Preserve/reflect url/uids lists from state (may be empty when cleared)
+      'ReceiptUrls': receiptUrls,
+      'ReceiptUids': receiptUids,
+      // Preserve file/url single sources unless cleared via UI
+      'LocalReceiptPath': localPath,
+      'ReceiptUrl': receiptUrl ?? '',
+      // Bubble through any existing id; if absent assign a provisional local id
+      'id': (widget.expense['id'] as String?)?.isNotEmpty == true
+          ? widget.expense['id']
+          : 'local_${DateTime.now().millisecondsSinceEpoch}',
     };
+
+    // If user removed all sources, ensure all fields are cleared
+    final removedAll =
+        receipts.isEmpty &&
+        (localPath == null || (localPath ?? '').isEmpty) &&
+        (receiptUrl == null || (receiptUrl ?? '').isEmpty) &&
+        receiptUrls.isEmpty &&
+        receiptUids.isEmpty;
+    if (removedAll) {
+      updatedExpense['Receipt'] = null;
+      updatedExpense['ReceiptBytes'] = <Uint8List>[];
+      updatedExpense['ReceiptUrls'] = <String>[];
+      updatedExpense['ReceiptUids'] = <String>[];
+      updatedExpense['LocalReceiptPath'] = null;
+      updatedExpense['ReceiptUrl'] = '';
+    }
     Navigator.pop(context, updatedExpense);
   }
 }

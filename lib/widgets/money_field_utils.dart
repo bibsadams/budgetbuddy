@@ -1,9 +1,6 @@
 import 'package:intl/intl.dart';
 
-final NumberFormat _currencyNoSymbol = NumberFormat.currency(
-  symbol: '',
-  decimalDigits: 2,
-);
+// Formatter for grouping thousands without a currency symbol.
 final NumberFormat _group2 = NumberFormat.decimalPattern();
 
 String formatTwoDecimalsGrouped(num? value) {
@@ -11,7 +8,7 @@ String formatTwoDecimalsGrouped(num? value) {
   final fixed = value.toDouble();
   final parts = fixed.toStringAsFixed(2).split('.');
   final grouped = _group2.format(int.parse(parts[0]));
-  return '${grouped}.${parts[1]}';
+  return '$grouped.${parts[1]}';
 }
 
 double parseLooseAmount(String raw) {

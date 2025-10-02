@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:convert';
 
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
@@ -103,6 +104,35 @@ class LocalReceiptService {
     }
     final f = File(path);
     await f.writeAsBytes(out, flush: true);
+    // Append a durable debug log entry so we can correlate saves with gallery lookups.
+    try {
+      final base = await _baseDir();
+      final debugFile = File('$base/receipts_debug.log');
+      final usedReceiptUid = (receiptUid != null && receiptUid.isNotEmpty)
+          ? receiptUid
+          : docId;
+      final entry = {
+        'ts': DateTime.now().toIso8601String(),
+        'accountId': accountId,
+        'collection': collection,
+        'docId': docId,
+        'receiptUidUsed': usedReceiptUid,
+        'path': path,
+        'bytes': out.length,
+      };
+      try {
+        await debugFile.writeAsString(
+          '${jsonEncode(entry)}\n',
+          mode: FileMode.append,
+          flush: true,
+        );
+      } catch (_) {
+        // non-fatal: don't let logging break the save operation
+      }
+    } catch (_) {
+      // ignore any debug-log failures
+    }
+
     return path;
   }
 

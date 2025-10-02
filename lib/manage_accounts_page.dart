@@ -89,11 +89,12 @@ class _ManageAccountsPageState extends State<ManageAccountsPage> {
                         ),
                         actions: [
                           TextButton(
-                            onPressed: () => Navigator.pop(d),
+                            onPressed: () => Navigator.of(d).pop(),
                             child: const Text('Cancel'),
                           ),
                           TextButton(
-                            onPressed: () => Navigator.pop(d, ctrl.text.trim()),
+                            onPressed: () =>
+                                Navigator.of(d).pop(ctrl.text.trim()),
                             child: const Text('Save'),
                           ),
                         ],

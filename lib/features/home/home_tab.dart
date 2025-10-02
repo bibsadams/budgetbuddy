@@ -93,7 +93,7 @@ class _HomeTabState extends State<HomeTab> {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final bills = (widget.tableData['Bills'] ?? []) as List? ?? [];
-    DateTime? _parseDateFlexible(String v) {
+    DateTime? parseDateFlexible(String v) {
       if (v.isEmpty) return null;
       final iso = DateTime.tryParse(v);
       if (iso != null) return iso;
@@ -111,7 +111,7 @@ class _HomeTabState extends State<HomeTab> {
 
     final dueSoon = bills.where((row) {
       final ds = (row['Due Date'] ?? row['Date'] ?? '').toString();
-      final dt = _parseDateFlexible(ds);
+      final dt = parseDateFlexible(ds);
       if (dt == null) return false;
       final d0 = DateTime(dt.year, dt.month, dt.day);
       final diff = d0.difference(today).inDays;

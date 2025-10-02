@@ -263,7 +263,55 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
                   savingsRows: savingsRows,
                   onRowsChanged: (newRows) {
                     setState(() {
-                      tableData['Expenses'] = newRows;
+                      // Preserve any local receipt metadata when replacing the list
+                      final existing =
+                          Map<String, Map<String, dynamic>>.fromEntries(
+                            (tableData['Expenses'] ?? [])
+                                .where(
+                                  (e) => (e['id'] ?? '').toString().isNotEmpty,
+                                )
+                                .map(
+                                  (e) => MapEntry(
+                                    (e['id'] as String).toString(),
+                                    Map<String, dynamic>.from(e),
+                                  ),
+                                ),
+                          );
+                      // Simple overlay: if a new row lacks ReceiptUids/LocalReceiptPath,
+                      // copy from the previous entry with same id.
+                      final merged = newRows.map<Map<String, dynamic>>((r) {
+                        final id = (r['id'] ?? '').toString();
+                        final m = Map<String, dynamic>.from(r);
+                        if ((m['LocalReceiptPath'] == null ||
+                                (m['LocalReceiptPath'] as String).isEmpty) &&
+                            existing.containsKey(id)) {
+                          final prev = existing[id]!;
+                          final prevPath = (prev['LocalReceiptPath'] ?? '')
+                              .toString();
+                          if (prevPath.isNotEmpty)
+                            m['LocalReceiptPath'] = prevPath;
+                        }
+                        if ((m['ReceiptUids'] == null ||
+                                !(m['ReceiptUids'] is List) ||
+                                (m['ReceiptUids'] as List).isEmpty) &&
+                            existing.containsKey(id)) {
+                          final prev = existing[id]!;
+                          if (prev['ReceiptUids'] is List &&
+                              (prev['ReceiptUids'] as List).isNotEmpty) {
+                            m['ReceiptUids'] = List<String>.from(
+                              prev['ReceiptUids'] as List,
+                            );
+                          } else if ((prev['ReceiptUid'] ?? '')
+                              .toString()
+                              .isNotEmpty) {
+                            m['ReceiptUids'] = [
+                              (prev['ReceiptUid'] ?? '').toString(),
+                            ];
+                          }
+                        }
+                        return m;
+                      }).toList();
+                      tableData['Expenses'] = merged;
                       saveData();
                     });
                   },
@@ -390,14 +438,14 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
     }
 
     String monthLabel(int m) => DateFormat.MMM().format(DateTime(2000, m));
-    final header = '${monthLabel(_reportMonth)} ${_reportYear}';
+    final header = '${monthLabel(_reportMonth)} $_reportYear';
 
     // Filtered rows
     final expRows = expenses.where((r) => pass(r['Date'])).toList();
     final savRows = savings.where((r) => pass(r['Date'])).toList();
 
     // Aggregations
-    Map<String, double> _sumByCat(List<Map<String, dynamic>> rows) {
+    Map<String, double> sumByCat(List<Map<String, dynamic>> rows) {
       final map = <String, double>{};
       for (final r in rows) {
         final cat = (r['Category'] ?? r['Name'] ?? 'Uncategorized').toString();
@@ -409,7 +457,7 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
       return map;
     }
 
-    Map<String, double> _sumBySub(List<Map<String, dynamic>> rows) {
+    Map<String, double> sumBySub(List<Map<String, dynamic>> rows) {
       final map = <String, double>{};
       for (final r in rows) {
         final cat = (r['Category'] ?? r['Name'] ?? 'Uncategorized').toString();
@@ -423,12 +471,12 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
       return map;
     }
 
-    final expByCat = _sumByCat(expRows);
-    final expBySub = _sumBySub(expRows);
-    final savByCat = _sumByCat(savRows);
-    final savBySub = _sumBySub(savRows);
+    final expByCat = sumByCat(expRows);
+    final expBySub = sumBySub(expRows);
+    final savByCat = sumByCat(savRows);
+    final savBySub = sumBySub(savRows);
 
-    List<DropdownMenuItem<int>> _yearItems() {
+    List<DropdownMenuItem<int>> yearItems() {
       final years = <int>{_reportYear};
       for (final r in expenses + savings) {
         final d = r['Date'];
@@ -479,7 +527,7 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
                 value: _reportYear,
                 onChanged: (v) =>
                     setState(() => _reportYear = v ?? _reportYear),
-                items: _yearItems(),
+                items: yearItems(),
               ),
             ],
           ),
@@ -707,16 +755,16 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
     final nameController = TextEditingController();
     final result = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (d) => AlertDialog(
         title: const Text("New Tab Name"),
         content: TextField(controller: nameController),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.of(d).pop(),
             child: const Text("Cancel"),
           ),
           TextButton(
-            onPressed: () => Navigator.pop(context, nameController.text.trim()),
+            onPressed: () => Navigator.of(d).pop(nameController.text.trim()),
             child: const Text("Add"),
           ),
         ],
@@ -736,7 +784,7 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
     final nameController = TextEditingController(text: tab);
     final result = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (d) => AlertDialog(
         title: const Text("Edit or Delete Tab"),
         content: TextField(controller: nameController),
         actions: [
@@ -748,12 +796,12 @@ class _HomeTabsPageState extends State<HomeTabsPage> {
                   tableData.remove(tab);
                   saveData();
                 });
-                Navigator.pop(context);
+                Navigator.of(d).pop();
               },
               child: const Text("Delete"),
             ),
           TextButton(
-            onPressed: () => Navigator.pop(context, nameController.text.trim()),
+            onPressed: () => Navigator.of(d).pop(nameController.text.trim()),
             child: const Text("Rename"),
           ),
         ],

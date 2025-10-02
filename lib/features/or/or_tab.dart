@@ -346,30 +346,30 @@ class _OrTabState extends State<OrTab> {
                       child: const Icon(Icons.delete, color: Colors.white),
                     ),
                     confirmDismiss: (_) async {
-                      return await showDialog<bool>(
-                            context: context,
-                            builder: (_) => AlertDialog(
-                              title: const Text('Delete OR'),
-                              content: const Text(
-                                'Are you sure you want to delete this record?',
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.pop(context, false),
-                                  child: const Text('Cancel'),
-                                ),
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context, true),
-                                  child: const Text(
-                                    'Delete',
-                                    style: TextStyle(color: Colors.red),
-                                  ),
-                                ),
-                              ],
+                      final res = await showDialog<bool>(
+                        context: context,
+                        builder: (d) => AlertDialog(
+                          title: const Text('Delete OR'),
+                          content: const Text(
+                            'Are you sure you want to delete this record?',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(d).pop(false),
+                              child: const Text('Cancel'),
                             ),
-                          ) ??
-                          false;
+                            TextButton(
+                              onPressed: () => Navigator.of(d).pop(true),
+                              child: const Text(
+                                'Delete',
+                                style: TextStyle(color: Colors.red),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (!mounted) return false;
+                      return res ?? false;
                     },
                     onDismissed: (_) {
                       final original = List<Map<String, dynamic>>.from(
@@ -895,18 +895,18 @@ class _OrEditPageState extends State<OrEditPage> {
                     onPressed: () async {
                       final confirm = await showDialog<bool>(
                         context: context,
-                        builder: (_) => AlertDialog(
+                        builder: (d) => AlertDialog(
                           title: const Text('Delete OR'),
                           content: const Text(
                             'Are you sure you want to delete this record?',
                           ),
                           actions: [
                             TextButton(
-                              onPressed: () => Navigator.pop(context, false),
+                              onPressed: () => Navigator.of(d).pop(false),
                               child: const Text('Cancel'),
                             ),
                             TextButton(
-                              onPressed: () => Navigator.pop(context, true),
+                              onPressed: () => Navigator.of(d).pop(true),
                               child: const Text(
                                 'Delete',
                                 style: TextStyle(color: Colors.red),
@@ -915,6 +915,7 @@ class _OrEditPageState extends State<OrEditPage> {
                           ],
                         ),
                       );
+                      if (!mounted) return;
                       if (confirm == true) {
                         Navigator.pop(context, {
                           '__delete': true,

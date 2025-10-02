@@ -338,6 +338,7 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
         ],
       ),
     );
+    if (!mounted) return;
     if (ok == true) {
       // Attempt cloud delete if repo available and id present
       final id = widget.record['id'] as String?;
@@ -345,14 +346,14 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
         try {
           await widget.repo!.deleteCustomTabRecord(widget.tabId, id);
         } catch (e) {
-          if (mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(SnackBar(content: Text('Cloud delete failed: $e')));
-          }
+          if (!mounted) return;
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Cloud delete failed: $e')));
         }
       }
-      if (mounted) Navigator.pop(context, {'_deleted': true, 'id': id});
+      if (!mounted) return;
+      Navigator.pop(context, {'_deleted': true, 'id': id});
     }
   }
 

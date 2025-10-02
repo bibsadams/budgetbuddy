@@ -19,6 +19,7 @@ dependencies:
   hive: ^2.2.3
   hive_flutter: ^1.1.0
   path_provider: ^2.1.4
+  path: ^1.9.0
   cupertino_icons: ^1.0.8
   fl_chart: ^0.63.0
   flutter_local_notifications: ^17.0.0 # or latest
@@ -31,6 +32,7 @@ dependencies:
   image: ^4.2.0
   file_picker: ^8.0.7
   archive: ^3.4.10
+  permission_handler: ^12.0.1
 
 
 

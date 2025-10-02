@@ -178,10 +178,11 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
   Widget _buildRecordTile(Map<String, dynamic> r) {
     WidgetsBinding.instance.addPostFrameCallback((_) => _resolveReceiptPaths());
     final receiptUid = (r['ReceiptUid'] ?? '').toString();
-  final localPath = receiptUid.isNotEmpty ? _receiptPaths[receiptUid] : null;
-  final receiptUrl = (r['ReceiptUrl'] ?? '').toString();
-  final memBytes = r['Receipt'];
-  final hasReceipt = receiptUid.isNotEmpty || receiptUrl.isNotEmpty || memBytes != null;
+    final localPath = receiptUid.isNotEmpty ? _receiptPaths[receiptUid] : null;
+    final receiptUrl = (r['ReceiptUrl'] ?? '').toString();
+    final memBytes = r['Receipt'];
+    final hasReceipt =
+        receiptUid.isNotEmpty || receiptUrl.isNotEmpty || memBytes != null;
 
     Widget leading;
     if (hasReceipt) {
@@ -199,7 +200,8 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
           ),
         );
       } else if (receiptUrl.isNotEmpty) {
-        final bustUrl = '$receiptUrl?v=${DateTime.now().millisecondsSinceEpoch}';
+        final bustUrl =
+            '$receiptUrl?v=${DateTime.now().millisecondsSinceEpoch}';
         leading = ClipRRect(
           borderRadius: radius,
           child: Image.network(
@@ -221,7 +223,9 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
           borderRadius: radius,
           child: Image.file(
             File(localPath),
-            key: ValueKey('file-${r['id']}-${stat.modified.millisecondsSinceEpoch}'),
+            key: ValueKey(
+              'file-${r['id']}-${stat.modified.millisecondsSinceEpoch}',
+            ),
             width: 48,
             height: 48,
             fit: BoxFit.cover,
@@ -243,7 +247,7 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
       );
     }
 
-    final handleEdit = () async {
+    Future<void> handleEdit() async {
       final updated = await Navigator.push<Map<String, dynamic>>(
         context,
         MaterialPageRoute(
@@ -285,7 +289,7 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
           ).showSnackBar(SnackBar(content: Text('Failed to update: $e')));
         }
       }
-    };
+    }
 
     final content = PressableNeumorphic(
       borderRadius: 16,
@@ -393,6 +397,7 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
               ],
             ),
           );
+          if (!mounted) return false;
           if (ok == true) {
             try {
               if (_repo != null && (r['id'] as String?)?.isNotEmpty == true) {
@@ -479,7 +484,8 @@ Widget _swipeBg(
 ) => Container(
   alignment: alignment,
   padding: const EdgeInsets.symmetric(horizontal: 20),
-  color: color.withOpacity(0.85),
+  // Avoid deprecated withOpacity; use withAlpha to preserve precision
+  color: color.withAlpha((0.85 * 255).round()),
   child: Icon(icon, color: Colors.white, size: 28),
 );
 

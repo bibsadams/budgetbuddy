@@ -127,7 +127,7 @@ class BillsTab extends StatelessWidget {
                                 onPressed: () async {
                                   final confirm = await showDialog<bool>(
                                     context: context,
-                                    builder: (_) => AlertDialog(
+                                    builder: (d) => AlertDialog(
                                       title: const Text('Delete Bill'),
                                       content: const Text(
                                         'Delete this bill and its reminder?',
@@ -135,12 +135,12 @@ class BillsTab extends StatelessWidget {
                                       actions: [
                                         TextButton(
                                           onPressed: () =>
-                                              Navigator.pop(context, false),
+                                              Navigator.of(d).pop(false),
                                           child: const Text('Cancel'),
                                         ),
                                         TextButton(
                                           onPressed: () =>
-                                              Navigator.pop(context, true),
+                                              Navigator.of(d).pop(true),
                                           child: const Text('Delete'),
                                         ),
                                       ],
@@ -537,7 +537,7 @@ class _BillEditPageState extends State<_BillEditPage> {
                   children: [
                     Expanded(
                       child: DropdownButtonFormField<String>(
-                        value: _repeat,
+                        initialValue: _repeat,
                         decoration: const InputDecoration(
                           labelText: 'Repeat',
                           prefixIcon: Icon(Icons.repeat),

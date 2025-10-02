@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart';
 import 'features/custom_tabs/custom_tab_page.dart';
@@ -212,10 +213,12 @@ class _MainTabsPageState extends State<MainTabsPage> {
     }
 
     setState(() {
+      // Merge in any existing local ReceiptUids/LocalReceiptPath so we don't
+      // accidentally drop multi-image metadata when replacing the list.
       if (collection == 'expenses') {
-        tableData['Expenses'] = desired;
+        tableData['Expenses'] = _mergeLocalReceiptsInto('expenses', desired);
       } else {
-        tableData['Savings'] = desired;
+        tableData['Savings'] = _mergeLocalReceiptsInto('savings', desired);
       }
     });
     _saveLocalOnly();
@@ -317,7 +320,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
         expList[i] = {...expList[i], 'LocalReceiptPath': p};
       }
     }
-    tableData['Expenses'] = expList;
+    tableData['Expenses'] = _mergeLocalReceiptsInto('expenses', expList);
 
     final savList = List<Map<String, dynamic>>.from(tableData['Savings'] ?? []);
     for (int i = 0; i < savList.length; i++) {
@@ -486,6 +489,9 @@ class _MainTabsPageState extends State<MainTabsPage> {
       if (remoteRows.isEmpty) {
         return; // keep offline data if backend emits nothing
       }
+      debugPrint(
+        'expenses stream: remoteRows.len=${remoteRows.length}, ids=${remoteRows.map((r) => (r['id'] ?? '').toString()).toList()}',
+      );
       final local = List<Map<String, dynamic>>.from(
         tableData['Expenses'] ?? [],
       );
@@ -516,21 +522,70 @@ class _MainTabsPageState extends State<MainTabsPage> {
           // Otherwise, try to match a provisional local row and migrate its path mapping
           final remoteHash = (r['clientHash'] as String?) ?? _clientHash(r);
           final match = localProvisionalByHash[remoteHash];
+          debugPrint(
+            'expenses stream: remote id=$id, remoteHash=$remoteHash, matchedLocal=${match != null}',
+          );
           if (match != null) {
             final localId = (match['id'] ?? '').toString();
             final localPath = _localReceiptPathsExpenses[localId];
+            // Also migrate any ReceiptUids that the provisional local row may have
+            final provisionalUids = (match['ReceiptUids'] is List)
+                ? List<String>.from(match['ReceiptUids'] as List)
+                : <String>[];
+            // DEBUG: log provisional UIDs when present
+            if (provisionalUids.isNotEmpty) {
+              debugPrint(
+                'expenses stream: provisionalUids for localId=$localId -> $provisionalUids',
+              );
+            }
             if (localPath != null && localPath.isNotEmpty) {
               // Migrate mapping key from provisional -> remote id
               _localReceiptPathsExpenses.remove(localId);
               _localReceiptPathsExpenses[id] = localPath;
+              debugPrint(
+                'expenses stream: migrated LocalReceiptPath from $localId to $id (path=$localPath)',
+              );
               out = {
                 ...r,
                 'LocalReceiptPath': localPath,
                 'clientHash': remoteHash,
               };
+              // If remote row doesn't include ReceiptUids but provisional had them,
+              // carry them forward so the gallery can resolve them to local files.
+              if ((out['ReceiptUids'] == null ||
+                      (out['ReceiptUids'] is! List) ||
+                      (out['ReceiptUids'] as List).isEmpty) &&
+                  provisionalUids.isNotEmpty) {
+                out['ReceiptUids'] = provisionalUids;
+                debugPrint(
+                  'expenses stream: carried provisional ReceiptUids into remote id=$id -> ${out['ReceiptUids']}',
+                );
+              }
               consumedLocalIds.add(localId);
+              // Ensure this provisional match is not reused for other remote rows with the same clientHash
+              localProvisionalByHash.remove(remoteHash);
+              debugPrint(
+                'expenses stream: removed provisional match for localId=$localId clientHash=$remoteHash',
+              );
             } else {
+              // Even if no LocalReceiptPath, we still want to carry through ReceiptUids
+              if (provisionalUids.isNotEmpty) {
+                out = {
+                  ...r,
+                  'clientHash': remoteHash,
+                  if (provisionalUids.isNotEmpty)
+                    'ReceiptUids': provisionalUids,
+                };
+                debugPrint(
+                  'expenses stream: carried provisional ReceiptUids (no LocalReceiptPath) into remote id=$id -> ${out['ReceiptUids']}',
+                );
+              }
               consumedLocalIds.add(localId);
+              // Ensure this provisional match is not reused for other remote rows with the same clientHash
+              localProvisionalByHash.remove(remoteHash);
+              debugPrint(
+                'expenses stream: removed provisional match for localId=$localId clientHash=$remoteHash (no LocalReceiptPath)',
+              );
             }
           }
         }
@@ -577,8 +632,31 @@ class _MainTabsPageState extends State<MainTabsPage> {
           }
         }
       }
+      // Deduplicate: if a provisional local row (id local_ or empty) and a remote row
+      // share the same clientHash, keep the remote and drop the provisional to avoid duplicates
+      final uniqValues = uniq.values.toList();
+      final remoteByCh = <String, Map<String, dynamic>>{};
+      for (final r in uniqValues) {
+        final id = (r['id'] ?? '').toString();
+        final ch = (r['clientHash'] as String?) ?? _clientHash(r);
+        if (ch.isEmpty) continue;
+        final isLocal = id.isEmpty || id.startsWith('local_');
+        if (!isLocal && !remoteByCh.containsKey(ch)) {
+          remoteByCh[ch] = r;
+        }
+      }
+      final dedupedExpenses = uniqValues.where((r) {
+        final id = (r['id'] ?? '').toString();
+        final ch = (r['clientHash'] as String?) ?? _clientHash(r);
+        final isLocal = id.isEmpty || id.startsWith('local_');
+        return !(isLocal && ch.isNotEmpty && remoteByCh.containsKey(ch));
+      }).toList();
+
       setState(() {
-        tableData['Expenses'] = uniq.values.toList();
+        tableData['Expenses'] = _mergeLocalReceiptsInto(
+          'expenses',
+          dedupedExpenses,
+        );
       });
       _saveLocalOnly();
     });
@@ -613,6 +691,9 @@ class _MainTabsPageState extends State<MainTabsPage> {
           if (match != null) {
             final localId = (match['id'] ?? '').toString();
             final localPath = _localReceiptPathsSavings[localId];
+            final provisionalUids = (match['ReceiptUids'] is List)
+                ? List<String>.from(match['ReceiptUids'] as List)
+                : <String>[];
             if (localPath != null && localPath.isNotEmpty) {
               _localReceiptPathsSavings.remove(localId);
               _localReceiptPathsSavings[id] = localPath;
@@ -621,9 +702,33 @@ class _MainTabsPageState extends State<MainTabsPage> {
                 'LocalReceiptPath': localPath,
                 'clientHash': remoteHash,
               };
+              if ((out['ReceiptUids'] == null ||
+                      (out['ReceiptUids'] is! List) ||
+                      (out['ReceiptUids'] as List).isEmpty) &&
+                  provisionalUids.isNotEmpty) {
+                out['ReceiptUids'] = provisionalUids;
+              }
               consumedLocalIds.add(localId);
+              // Ensure this provisional match is not reused for other remote rows with the same clientHash
+              localProvisionalByHash.remove(remoteHash);
+              debugPrint(
+                'savings stream: removed provisional match for localId=$localId clientHash=$remoteHash',
+              );
             } else {
+              if (provisionalUids.isNotEmpty) {
+                out = {
+                  ...r,
+                  'clientHash': remoteHash,
+                  if (provisionalUids.isNotEmpty)
+                    'ReceiptUids': provisionalUids,
+                };
+              }
               consumedLocalIds.add(localId);
+              // Ensure this provisional match is not reused for other remote rows with the same clientHash
+              localProvisionalByHash.remove(remoteHash);
+              debugPrint(
+                'savings stream: removed provisional match for localId=$localId clientHash=$remoteHash (no LocalReceiptPath)',
+              );
             }
           }
         }
@@ -668,8 +773,30 @@ class _MainTabsPageState extends State<MainTabsPage> {
           }
         }
       }
+      // Deduplicate Savings similarly by clientHash
+      final uniqSavings = uniq.values.toList();
+      final remoteSavingsByCh = <String, Map<String, dynamic>>{};
+      for (final r in uniqSavings) {
+        final id = (r['id'] ?? '').toString();
+        final ch = (r['clientHash'] as String?) ?? _clientHash(r);
+        if (ch.isEmpty) continue;
+        final isLocal = id.isEmpty || id.startsWith('local_');
+        if (!isLocal && !remoteSavingsByCh.containsKey(ch)) {
+          remoteSavingsByCh[ch] = r;
+        }
+      }
+      final dedupedSavings = uniqSavings.where((r) {
+        final id = (r['id'] ?? '').toString();
+        final ch = (r['clientHash'] as String?) ?? _clientHash(r);
+        final isLocal = id.isEmpty || id.startsWith('local_');
+        return !(isLocal && ch.isNotEmpty && remoteSavingsByCh.containsKey(ch));
+      }).toList();
+
       setState(() {
-        tableData['Savings'] = uniq.values.toList();
+        tableData['Savings'] = _mergeLocalReceiptsInto(
+          'savings',
+          dedupedSavings,
+        );
       });
       _saveLocalOnly();
     });
@@ -760,8 +887,103 @@ class _MainTabsPageState extends State<MainTabsPage> {
     box.put('linkedAccounts_$uid', arr);
   }
 
+  // Merge helper: given an incoming list of rows for a collection, preserve any
+  // existing LocalReceiptPath and ReceiptUids that we have cached locally so
+  // that replacing the entire list won't drop multi-image metadata.
+  List<Map<String, dynamic>> _mergeLocalReceiptsInto(
+    String collection,
+    List<Map<String, dynamic>> incoming,
+  ) {
+    final out = <Map<String, dynamic>>[];
+    final localMap = collection == 'expenses'
+        ? _localReceiptPathsExpenses
+        : _localReceiptPathsSavings;
+    // Build a quick lookup from existing tableData (previous entries)
+    final existing = Map<String, Map<String, dynamic>>.fromEntries(
+      (tableData[collection == 'expenses' ? 'Expenses' : 'Savings'] ?? [])
+          .where((e) => (e['id'] ?? '').toString().isNotEmpty)
+          .map((e) => MapEntry((e['id'] as String).toString(), e)),
+    );
+
+    for (final r in incoming) {
+      final id = (r['id'] ?? '').toString();
+      var merged = Map<String, dynamic>.from(r);
+      // Prefer explicit LocalReceiptPath in the incoming row; otherwise overlay
+      // from our local cache.
+      if ((merged['LocalReceiptPath'] == null ||
+              (merged['LocalReceiptPath'] as String).isEmpty) &&
+          localMap.containsKey(id)) {
+        merged['LocalReceiptPath'] = localMap[id];
+      }
+      // Preserve previous ReceiptUids unless the caller is explicitly signaling
+      // a full removal. We consider it a removal only when ALL attachment fields
+      // are cleared (no LocalReceiptPath, no URLs, no bytes) AND the caller
+      // explicitly provided an empty ReceiptUids list.
+      final providesUids = merged.containsKey('ReceiptUids');
+      final uidsIsList = merged['ReceiptUids'] is List;
+      final explicitEmptyUids =
+          providesUids && uidsIsList && (merged['ReceiptUids'] as List).isEmpty;
+      final hasBytes =
+          merged['Receipt'] is Uint8List ||
+          (merged['ReceiptBytes'] is List &&
+              (merged['ReceiptBytes'] as List).isNotEmpty);
+      final hasLocalPath = ((merged['LocalReceiptPath'] ?? '') as String)
+          .toString()
+          .isNotEmpty;
+      final hasUrl = ((merged['ReceiptUrl'] ?? '') as String)
+          .toString()
+          .isNotEmpty;
+      final urlsLen = (merged['ReceiptUrls'] is List)
+          ? (merged['ReceiptUrls'] as List).length
+          : 0;
+      final isRemovalIntent =
+          explicitEmptyUids &&
+          !hasBytes &&
+          !hasLocalPath &&
+          !hasUrl &&
+          urlsLen == 0;
+
+      // Preserve previous UIDs if:
+      // - caller did not provide ReceiptUids at all, or
+      // - caller provided an empty list but it isn't a true removal intent (e.g. append flow)
+      final shouldPreservePrevUids =
+          (!providesUids ||
+          !uidsIsList ||
+          (explicitEmptyUids && !isRemovalIntent));
+
+      if (shouldPreservePrevUids && existing.containsKey(id)) {
+        final prev = existing[id]!;
+        if (prev['ReceiptUids'] is List &&
+            (prev['ReceiptUids'] as List).isNotEmpty) {
+          merged['ReceiptUids'] = List<String>.from(
+            prev['ReceiptUids'] as List,
+          );
+        } else if ((prev['ReceiptUid'] ?? '').toString().isNotEmpty) {
+          merged['ReceiptUids'] = [(prev['ReceiptUid'] ?? '').toString()];
+        }
+      }
+      out.add(merged);
+    }
+    try {
+      final preservedCount = out
+          .where(
+            (r) =>
+                r['ReceiptUids'] is List &&
+                (r['ReceiptUids'] as List).isNotEmpty,
+          )
+          .length;
+      final localPathCount = out
+          .where((r) => (r['LocalReceiptPath'] ?? '').toString().isNotEmpty)
+          .length;
+      debugPrint(
+        'mergeLocalReceiptsInto: collection=$collection incoming=${incoming.length} out=${out.length} preservedReceiptRows=$preservedCount localPathRows=$localPathCount',
+      );
+    } catch (_) {}
+    return out;
+  }
+
   // Immediately persist attachment for a newly added row at a known index.
-  Future<Map<String, String>?> _saveNewRowAttachmentImmediately({
+  Future<Map<String, dynamic>?> _saveNewRowAttachmentImmediately({
     required String collection, // 'expenses' | 'savings'
     required int index,
   }) async {
@@ -770,8 +992,14 @@ class _MainTabsPageState extends State<MainTabsPage> {
     );
     if (index < 0 || index >= list.length) return null;
     final item = Map<String, dynamic>.from(list[index]);
-    final hasBytes = item['Receipt'] != null && item['Receipt'] is Uint8List;
-    if (!hasBytes) return null;
+    // Support both legacy single 'Receipt' (Uint8List) and new 'ReceiptBytes' (List<Uint8List>)
+    final hasSingleBytes =
+        item['Receipt'] != null && item['Receipt'] is Uint8List;
+    final hasMultiBytes =
+        item['ReceiptBytes'] != null &&
+        item['ReceiptBytes'] is List &&
+        (item['ReceiptBytes'] as List).isNotEmpty;
+    if (!hasSingleBytes && !hasMultiBytes) return null;
 
     // Assign a local id if absent
     String id = (item['id'] as String?) ?? '';
@@ -780,44 +1008,96 @@ class _MainTabsPageState extends State<MainTabsPage> {
     }
 
     try {
-      // Ensure a stable receipt uid exists on first attach
-      String receiptUid = (item['ReceiptUid'] ?? item['receiptUid'] ?? '')
-          .toString();
-      if (receiptUid.isEmpty) {
-        receiptUid = _genReceiptUid();
-        item['ReceiptUid'] = receiptUid;
+      // Persist one or multiple receipt bytes locally and assign stable receipt UIDs
+      final LocalReceiptService lrs = LocalReceiptService();
+      List<String> savedPaths = [];
+      List<String> savedUids = [];
+      if (hasMultiBytes) {
+        final List raw = item['ReceiptBytes'] as List;
+        for (int i = 0; i < raw.length; i++) {
+          final bytes = raw[i];
+          if (bytes is! Uint8List) continue;
+          String receiptUid = _genReceiptUid();
+          final path = await lrs.saveReceipt(
+            accountId: widget.accountId,
+            collection: collection,
+            docId: id,
+            bytes: bytes,
+            receiptUid: receiptUid,
+          );
+          // DEBUG: log exactly where each receipt UID was saved
+          try {
+            debugPrint(
+              'savedReceipt: receiptUid=$receiptUid path=$path docId=$id collection=$collection accountId=${widget.accountId}',
+            );
+          } catch (_) {}
+          savedPaths.add(path);
+          savedUids.add(receiptUid);
+        }
+        if (savedUids.isNotEmpty) item['ReceiptUids'] = savedUids;
+        // Prevent later duplicate processing during creation flow
+        item.remove('ReceiptBytes');
+      } else if (hasSingleBytes) {
+        String receiptUid = (item['ReceiptUid'] ?? item['receiptUid'] ?? '')
+            .toString();
+        if (receiptUid.isEmpty) {
+          receiptUid = _genReceiptUid();
+          item['ReceiptUid'] = receiptUid;
+        }
+        final path = await lrs.saveReceipt(
+          accountId: widget.accountId,
+          collection: collection,
+          docId: id,
+          bytes: item['Receipt'] as Uint8List,
+          receiptUid: receiptUid,
+        );
+        // DEBUG: log exactly where the single receipt UID was saved
+        try {
+          debugPrint(
+            'savedReceipt: receiptUid=$receiptUid path=$path docId=$id collection=$collection accountId=${widget.accountId}',
+          );
+        } catch (_) {}
+        savedPaths.add(path);
+        savedUids.add(receiptUid);
       }
-      final path = await LocalReceiptService().saveReceipt(
-        accountId: widget.accountId,
-        collection: collection,
-        docId: id,
-        bytes: item['Receipt'] as Uint8List,
-        receiptUid: receiptUid,
-      );
 
       // Update maps and row in-place for immediate UI
+      // Store the first path in the local path map for immediate UI display
+      final firstPath = savedPaths.isNotEmpty ? savedPaths.first : null;
       if (collection == 'expenses') {
-        _localReceiptPathsExpenses[id] = path;
+        if (firstPath != null) _localReceiptPathsExpenses[id] = firstPath;
       } else {
-        _localReceiptPathsSavings[id] = path;
+        if (firstPath != null) _localReceiptPathsSavings[id] = firstPath;
       }
       final ch = (item['clientHash'] as String?) ?? _clientHash(item);
       list[index] = {
         ...item,
         'id': id,
-        'LocalReceiptPath': path,
-        'ReceiptUid': receiptUid,
+        if (firstPath != null) 'LocalReceiptPath': firstPath,
+        if (savedUids.isNotEmpty) 'ReceiptUids': savedUids,
+        // Backwards-compat: populate single legacy fields from first item
+        if (savedUids.isNotEmpty) 'ReceiptUid': savedUids.first,
         'clientHash': ch,
       };
+      // DEBUG: provisional creation event
+      if (savedUids.isNotEmpty) {
+        debugPrint(
+          'provisionalCreated: localId=$id path=$firstPath ReceiptUids=$savedUids',
+        );
+      } else {
+        debugPrint(
+          'provisionalCreated: localId=$id path=$firstPath ReceiptUid=${(list[index]['ReceiptUid'] ?? '')}',
+        );
+      }
       setState(() {
         if (collection == 'expenses') {
-          tableData['Expenses'] = list;
+          tableData['Expenses'] = _mergeLocalReceiptsInto('expenses', list);
         } else {
-          tableData['Savings'] = list;
+          tableData['Savings'] = _mergeLocalReceiptsInto('savings', list);
         }
       });
       _saveLocalOnly();
-      return {'id': id, 'path': path};
+      return {'id': id, 'path': firstPath ?? '', 'uids': savedUids};
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -889,9 +1169,9 @@ class _MainTabsPageState extends State<MainTabsPage> {
     if (changed) {
       setState(() {
         if (collection == 'expenses') {
-          tableData['Expenses'] = list;
+          tableData['Expenses'] = _mergeLocalReceiptsInto('expenses', list);
         } else {
-          tableData['Savings'] = list;
+          tableData['Savings'] = _mergeLocalReceiptsInto('savings', list);
         }
       });
       _saveLocalOnly();
@@ -1431,6 +1711,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
                           ],
                         ),
                       );
+                      if (!mounted) return;
                       if (ok == true) {
                         try {
                           if (_repo == null) return;
@@ -1473,6 +1754,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
                           ],
                         ),
                       );
+                      if (!mounted) return;
                       if (ok == true) {
                         try {
                           if (_repo == null) return;
@@ -1486,7 +1768,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
                               ? 'Permission denied deleting tab.'
                               : 'Failed to remove tab';
                           final detail = es.length > 160
-                              ? es.substring(0, 160) + '…'
+                              ? '${es.substring(0, 160)}…'
                               : es;
                           // Archive fallback: if permission denied on delete, try marking archived
                           if (es.contains('PERMISSION_DENIED')) {
@@ -2204,9 +2486,10 @@ class _MainTabsPageState extends State<MainTabsPage> {
                                 final arr = setList.toList();
                                 final linkedKey = 'linkedAccounts_${user.uid}';
                                 box.put(linkedKey, arr);
-                                if (mounted)
+                                if (mounted) {
                                   setState(() => _linkedAccounts = arr);
-                                if (mounted)
+                                }
+                                if (mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     SnackBar(
                                       content: Text(
@@ -2214,12 +2497,13 @@ class _MainTabsPageState extends State<MainTabsPage> {
                                       ),
                                     ),
                                   );
+                                }
                                 await sub?.cancel();
                               }
                             });
 
                         if (mounted) Navigator.of(ctx).pop();
-                        if (mounted)
+                        if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text(
@@ -2228,6 +2512,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
                               duration: Duration(seconds: 5),
                             ),
                           );
+                        }
                       } catch (e) {
                         setM(() => error = 'Failed: $e');
                       } finally {
@@ -2269,9 +2554,24 @@ class _MainTabsPageState extends State<MainTabsPage> {
       limit: limit,
       savingsRows: List<Map<String, dynamic>>.from(tableData['Savings'] ?? []),
       onRowsChanged: (newRows) async {
+        // Debug: log incoming rows
+        debugPrint(
+          'Expenses.onRowsChanged called: prevLen=${rawRows.length}, newLen=${newRows.length}, ids=${newRows.map((r) => (r['id'] ?? '').toString()).toList()}',
+        );
+        // Ensure each incoming row has a clientHash for stable matching
+        final normalized = newRows.map<Map<String, dynamic>>((r) {
+          final item = Map<String, dynamic>.from(r);
+          final ch = (item['clientHash'] as String?) ?? _clientHash(item);
+          item['clientHash'] = ch;
+          return item;
+        }).toList();
+        newRows = normalized;
         // Immediate UI + offline persistence
         setState(() {
-          tableData['Expenses'] = List<Map<String, dynamic>>.from(newRows);
+          tableData['Expenses'] = _mergeLocalReceiptsInto(
+            'expenses',
+            List<Map<String, dynamic>>.from(newRows),
+          );
         });
         _saveLocalOnly();
 
@@ -2285,19 +2585,28 @@ class _MainTabsPageState extends State<MainTabsPage> {
               index: i,
             );
             if (res != null) {
+              debugPrint('Expenses: attachment saved for index $i -> $res');
               // Keep the same id for later Firestore creation & UI
+              final uids =
+                  (res['uids'] as List?)?.whereType<String>().toList() ?? [];
               newRows[i] = {
                 ...newRows[i],
                 'id': res['id'],
                 if (res['path'] != null) 'LocalReceiptPath': res['path'],
-                if (((newRows[i]['ReceiptUid'] ?? '') as String).isNotEmpty)
+                if (uids.isNotEmpty) 'ReceiptUids': uids,
+                if (uids.isNotEmpty) 'ReceiptUid': uids.first,
+                if (uids.isEmpty &&
+                    ((newRows[i]['ReceiptUid'] ?? '') as String).isNotEmpty)
                   'ReceiptUid': (newRows[i]['ReceiptUid'] ?? '').toString(),
               };
             }
           }
           // Re-sync updated newRows back into state so callers/UI see id/path immediately
           setState(() {
-            tableData['Expenses'] = List<Map<String, dynamic>>.from(newRows);
+            tableData['Expenses'] = _mergeLocalReceiptsInto(
+              'expenses',
+              List<Map<String, dynamic>>.from(newRows),
+            );
           });
           _saveLocalOnly();
         }
@@ -2365,10 +2674,59 @@ class _MainTabsPageState extends State<MainTabsPage> {
         for (final id in desiredById.keys) {
           if (currentById.containsKey(id)) {
             final desiredItem = desiredById[id]!;
+            final hasMulti =
+                desiredItem['ReceiptBytes'] != null &&
+                desiredItem['ReceiptBytes'] is List &&
+                (desiredItem['ReceiptBytes'] as List).isNotEmpty;
+            // Detect attachment differences explicitly so removal triggers updates
+            bool attachmentsDiffer() {
+              final cur = currentById[id]!;
+              bool curHasPath = ((cur['LocalReceiptPath'] ?? '') as String)
+                  .toString()
+                  .isNotEmpty;
+              bool desHasPath =
+                  ((desiredItem['LocalReceiptPath'] ?? '') as String)
+                      .toString()
+                      .isNotEmpty;
+              bool curHasUrl = ((cur['ReceiptUrl'] ?? '') as String)
+                  .toString()
+                  .isNotEmpty;
+              bool desHasUrl = ((desiredItem['ReceiptUrl'] ?? '') as String)
+                  .toString()
+                  .isNotEmpty;
+              int curUrlsLen = (cur['ReceiptUrls'] is List)
+                  ? (cur['ReceiptUrls'] as List).length
+                  : 0;
+              int desUrlsLen = (desiredItem['ReceiptUrls'] is List)
+                  ? (desiredItem['ReceiptUrls'] as List).length
+                  : 0;
+              int curUidsLen = (cur['ReceiptUids'] is List)
+                  ? (cur['ReceiptUids'] as List).length
+                  : 0;
+              int desUidsLen = (desiredItem['ReceiptUids'] is List)
+                  ? (desiredItem['ReceiptUids'] as List).length
+                  : 0;
+              bool curHasBytes =
+                  cur['Receipt'] is Uint8List ||
+                  (cur['ReceiptBytes'] is List &&
+                      (cur['ReceiptBytes'] as List).isNotEmpty);
+              bool desHasBytes =
+                  desiredItem['Receipt'] is Uint8List ||
+                  (desiredItem['ReceiptBytes'] is List &&
+                      (desiredItem['ReceiptBytes'] as List).isNotEmpty);
+              return curHasPath != desHasPath ||
+                  curHasUrl != desHasUrl ||
+                  curUrlsLen != desUrlsLen ||
+                  curUidsLen != desUidsLen ||
+                  curHasBytes != desHasBytes;
+            }
+
             final changed =
                 fingerprint(currentById[id]!) != fingerprint(desiredItem) ||
                 (desiredItem['Receipt'] != null &&
-                    desiredItem['Receipt'] is Uint8List);
+                    desiredItem['Receipt'] is Uint8List) ||
+                hasMulti ||
+                attachmentsDiffer();
             if (changed) {
               await _maybeUploadReceiptAndPersist(
                 collection: 'expenses',
@@ -2376,6 +2734,14 @@ class _MainTabsPageState extends State<MainTabsPage> {
                 item: desiredItem,
                 isUpdate: true,
               );
+              // After processing multi-images, clear bytes to avoid re-saving
+              if (hasMulti) {
+                final idx = desired.indexWhere((r) => (r['id'] ?? '') == id);
+                if (idx != -1) {
+                  desired[idx] = Map<String, dynamic>.from(desired[idx])
+                    ..remove('ReceiptBytes');
+                }
+              }
             }
           }
         }
@@ -2385,10 +2751,16 @@ class _MainTabsPageState extends State<MainTabsPage> {
           final sid = e['id'] as String?;
           return sid == null || sid.startsWith('local_');
         })) {
+          debugPrint(
+            'Expenses: creating record for provisional id ${(r['id'] as String?) ?? ''}, clientHash=${(r['clientHash'] ?? _clientHash(r)).toString()}',
+          );
+          // Guard: Do not pass ReceiptBytes to avoid double-processing; they
+          // are handled by _saveNewRowAttachmentImmediately immediately upon add.
+          final clean = Map<String, dynamic>.from(r)..remove('ReceiptBytes');
           await _maybeUploadReceiptAndPersist(
             collection: 'expenses',
-            id: (r['id'] as String?) ?? '',
-            item: r,
+            id: (clean['id'] as String?) ?? '',
+            item: clean,
             isUpdate: false,
           );
         }
@@ -2554,7 +2926,10 @@ class _MainTabsPageState extends State<MainTabsPage> {
       onRowsChanged: (newRows) async {
         // Immediate UI + offline persistence
         setState(() {
-          tableData['Savings'] = List<Map<String, dynamic>>.from(newRows);
+          tableData['Savings'] = _mergeLocalReceiptsInto(
+            'savings',
+            List<Map<String, dynamic>>.from(newRows),
+          );
         });
         _saveLocalOnly();
 
@@ -2579,7 +2954,10 @@ class _MainTabsPageState extends State<MainTabsPage> {
           }
           // Re-sync updated newRows back into state so callers/UI see id/path immediately
           setState(() {
-            tableData['Savings'] = List<Map<String, dynamic>>.from(newRows);
+            tableData['Savings'] = _mergeLocalReceiptsInto(
+              'savings',
+              List<Map<String, dynamic>>.from(newRows),
+            );
           });
           _saveLocalOnly();
         }
@@ -2821,6 +3199,10 @@ class _MainTabsPageState extends State<MainTabsPage> {
     required bool isUpdate,
   }) async {
     final hasBytes = item['Receipt'] != null && item['Receipt'] is Uint8List;
+    final hasMultiBytes =
+        item['ReceiptBytes'] != null &&
+        item['ReceiptBytes'] is List &&
+        (item['ReceiptBytes'] as List).isNotEmpty;
 
     // 1) Save locally first and update UI immediately
     String localId = id;
@@ -2835,7 +3217,259 @@ class _MainTabsPageState extends State<MainTabsPage> {
     final ch = (item['clientHash'] as String?) ?? _clientHash(item);
     item = {...item, 'clientHash': ch};
 
-    if (hasBytes) {
+    // If this is an update and all attachment fields are cleared, reflect that
+    // immediately in local state (table rows and preview cache) so UI updates.
+    final removedAll =
+        isUpdate &&
+        !hasBytes &&
+        !hasMultiBytes &&
+        (((item['LocalReceiptPath'] ?? '') as String).isEmpty) &&
+        (((item['ReceiptUrl'] ?? '') as String).isEmpty) &&
+        (!(item['ReceiptUrls'] is List) ||
+            (item['ReceiptUrls'] as List).isEmpty) &&
+        (!(item['ReceiptUids'] is List) ||
+            (item['ReceiptUids'] as List).isEmpty);
+
+    if (removedAll) {
+      setState(() {
+        if (collection == 'expenses') {
+          final list = List<Map<String, dynamic>>.from(
+            tableData['Expenses'] ?? [],
+          );
+          // Locate row by id or fingerprint
+          int idx = list.indexWhere((r) => (r['id'] ?? '') == localId);
+          if (idx == -1) {
+            idx = list.lastIndexWhere(
+              (r) =>
+                  ((r['id'] == null ||
+                      (r['id'] as String?)?.isEmpty == true)) &&
+                  ((r['clientHash'] as String?) == ch || _clientHash(r) == ch),
+            );
+          }
+          if (idx != -1) {
+            list[idx] = {
+              ...list[idx],
+              'id': localId,
+              'LocalReceiptPath': null,
+              'Receipt': null,
+              'ReceiptUid': '',
+              'ReceiptUids': <String>[],
+              'ReceiptUrl': '',
+              'ReceiptUrls': <String>[],
+              // Do not keep any pending bytes on the row
+              'ReceiptBytes': <Uint8List>[],
+              'clientHash': ch,
+            };
+            tableData['Expenses'] = list;
+          }
+          // Clear preview cache so overlay will not re-inject
+          _localReceiptPathsExpenses.remove(localId);
+        } else {
+          final list = List<Map<String, dynamic>>.from(
+            tableData['Savings'] ?? [],
+          );
+          int idx = list.indexWhere((r) => (r['id'] ?? '') == localId);
+          if (idx == -1) {
+            idx = list.lastIndexWhere(
+              (r) =>
+                  ((r['id'] == null ||
+                      (r['id'] as String?)?.isEmpty == true)) &&
+                  ((r['clientHash'] as String?) == ch || _clientHash(r) == ch),
+            );
+          }
+          if (idx != -1) {
+            list[idx] = {
+              ...list[idx],
+              'id': localId,
+              'LocalReceiptPath': null,
+              'Receipt': null,
+              'ReceiptUid': '',
+              'ReceiptUids': <String>[],
+              'ReceiptUrl': '',
+              'ReceiptUrls': <String>[],
+              'ReceiptBytes': <Uint8List>[],
+              'clientHash': ch,
+            };
+            tableData['Savings'] = list;
+          }
+          _localReceiptPathsSavings.remove(localId);
+        }
+      });
+      _saveLocalOnly();
+    }
+
+    // When multiple new images are provided, append them all and skip the
+    // single-image path to avoid duplicate saves.
+    // Only handle multi-image append during updates; creations already handled
+    // in _saveNewRowAttachmentImmediately.
+    if (hasMultiBytes && isUpdate) {
+      try {
+        final List raw = item['ReceiptBytes'] as List;
+        final savedPaths = <String>[];
+        final newUids = <String>[];
+
+        // Determine if caller already provided target UIDs by comparing with
+        // existing row's ReceiptUids (if any). We'll try to reuse them to keep
+        // UI in sync immediately.
+        List<String> providedAllUids = const [];
+        List<String> existingUidsForRow = const [];
+        // Locate current row for UID comparison
+        Map<String, dynamic>? currentRow;
+        if (collection == 'expenses') {
+          final list = List<Map<String, dynamic>>.from(
+            tableData['Expenses'] ?? [],
+          );
+          int idx = list.indexWhere((r) => (r['id'] ?? '') == localId);
+          if (idx == -1) {
+            idx = list.lastIndexWhere(
+              (r) =>
+                  ((r['id'] == null ||
+                      (r['id'] as String?)?.isEmpty == true)) &&
+                  ((r['clientHash'] as String?) == ch || _clientHash(r) == ch),
+            );
+          }
+          if (idx != -1) currentRow = list[idx];
+        } else {
+          final list = List<Map<String, dynamic>>.from(
+            tableData['Savings'] ?? [],
+          );
+          int idx = list.indexWhere((r) => (r['id'] ?? '') == localId);
+          if (idx == -1) {
+            idx = list.lastIndexWhere(
+              (r) =>
+                  ((r['id'] == null ||
+                      (r['id'] as String?)?.isEmpty == true)) &&
+                  ((r['clientHash'] as String?) == ch || _clientHash(r) == ch),
+            );
+          }
+          if (idx != -1) currentRow = list[idx];
+        }
+        if (item['ReceiptUids'] is List) {
+          providedAllUids = (item['ReceiptUids'] as List)
+              .whereType<String>()
+              .toList();
+        }
+        if (currentRow != null && currentRow['ReceiptUids'] is List) {
+          existingUidsForRow = (currentRow['ReceiptUids'] as List)
+              .whereType<String>()
+              .toList();
+        }
+        final canReuseProvided =
+            providedAllUids.isNotEmpty &&
+            providedAllUids.length >= existingUidsForRow.length + raw.length;
+        final providedTail = canReuseProvided
+            ? providedAllUids.sublist(providedAllUids.length - raw.length)
+            : const <String>[];
+        for (int i = 0; i < raw.length; i++) {
+          final bytes = raw[i];
+          if (bytes is! Uint8List) continue;
+          final receiptUid = (i < providedTail.length)
+              ? providedTail[i]
+              : _genReceiptUid();
+          final path = await LocalReceiptService().saveReceipt(
+            accountId: widget.accountId,
+            collection: collection,
+            docId: localId,
+            bytes: bytes,
+            receiptUid: receiptUid,
+          );
+          savedPaths.add(path);
+          newUids.add(receiptUid);
+        }
+
+        // Compute combined UIDs with any existing on the row
+        final combinedUids = [...existingUidsForRow, ...newUids];
+
+        // Update local maps and table data
+        setState(() {
+          if (collection == 'expenses') {
+            final list = List<Map<String, dynamic>>.from(
+              tableData['Expenses'] ?? [],
+            );
+            // Locate row by id or fingerprint
+            int idx = list.indexWhere((r) => (r['id'] ?? '') == localId);
+            if (idx == -1) {
+              idx = list.lastIndexWhere(
+                (r) =>
+                    ((r['id'] == null ||
+                        (r['id'] as String?)?.isEmpty == true)) &&
+                    ((r['clientHash'] as String?) == ch ||
+                        _clientHash(r) == ch),
+              );
+            }
+            if (idx != -1) {
+              final existingUids = (list[idx]['ReceiptUids'] is List)
+                  ? List<String>.from(list[idx]['ReceiptUids'] as List)
+                  : <String>[];
+              final allUids = [...existingUids, ...newUids];
+              // Set a preview path if none exists
+              String? previewPath = list[idx]['LocalReceiptPath'] as String?;
+              if ((previewPath == null || previewPath.isEmpty) &&
+                  savedPaths.isNotEmpty) {
+                previewPath = savedPaths.first;
+                _localReceiptPathsExpenses[localId] = previewPath;
+              }
+              list[idx] = {
+                ...list[idx],
+                'id': localId,
+                if (previewPath != null && previewPath.isNotEmpty)
+                  'LocalReceiptPath': previewPath,
+                'ReceiptUids': allUids,
+                // Legacy single uid left unchanged; multi is canonical
+                'clientHash': ch,
+              };
+              tableData['Expenses'] = _mergeLocalReceiptsInto('expenses', list);
+            }
+          } else {
+            final list = List<Map<String, dynamic>>.from(
+              tableData['Savings'] ?? [],
+            );
+            int idx = list.indexWhere((r) => (r['id'] ?? '') == localId);
+            if (idx == -1) {
+              idx = list.lastIndexWhere(
+                (r) =>
+                    ((r['id'] == null ||
+                        (r['id'] as String?)?.isEmpty == true)) &&
+                    ((r['clientHash'] as String?) == ch ||
+                        _clientHash(r) == ch),
+              );
+            }
+            if (idx != -1) {
+              final existingUids = (list[idx]['ReceiptUids'] is List)
+                  ? List<String>.from(list[idx]['ReceiptUids'] as List)
+                  : <String>[];
+              final allUids = [...existingUids, ...newUids];
+              String? previewPath = list[idx]['LocalReceiptPath'] as String?;
+              if ((previewPath == null || previewPath.isEmpty) &&
+                  savedPaths.isNotEmpty) {
+                previewPath = savedPaths.first;
+                _localReceiptPathsSavings[localId] = previewPath;
+              }
+              list[idx] = {
+                ...list[idx],
+                'id': localId,
+                if (previewPath != null && previewPath.isNotEmpty)
+                  'LocalReceiptPath': previewPath,
+                'ReceiptUids': allUids,
+                'clientHash': ch,
+              };
+              tableData['Savings'] = list;
+            }
+          }
+        });
+        _saveLocalOnly();
+        // Clear processed bytes and carry combined UIDs for Firestore merge
+        item = Map<String, dynamic>.from(item)
+          ..remove('ReceiptBytes')
+          ..['ReceiptUids'] = combinedUids;
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to save images locally: $e')),
+          );
+        }
+      }
+    } else if (hasBytes) {
       // Ensure a stable receipt uid exists on first attach
       String receiptUid = (item['ReceiptUid'] ?? item['receiptUid'] ?? '')
           .toString();
@@ -2875,9 +3509,17 @@ class _MainTabsPageState extends State<MainTabsPage> {
                 'id': localId,
                 'LocalReceiptPath': path,
                 'ReceiptUid': (item['ReceiptUid'] ?? '').toString(),
+                // Preserve multi-image uids when present (either on the item or existing list entry)
+                if ((item['ReceiptUids'] ?? list[idx]['ReceiptUids']) != null)
+                  'ReceiptUids':
+                      item['ReceiptUids'] ?? list[idx]['ReceiptUids'],
                 'clientHash': ch,
               };
-              tableData['Expenses'] = list;
+              // DEBUG: log local persist details
+              debugPrint(
+                'maybeUpload: persisted localId=$localId path=$path ReceiptUids=${(item['ReceiptUids'] ?? list[idx]['ReceiptUids'])}',
+              );
+              tableData['Expenses'] = _mergeLocalReceiptsInto('expenses', list);
             }
           } else {
             _localReceiptPathsSavings[localId] = path;
@@ -2900,6 +3542,9 @@ class _MainTabsPageState extends State<MainTabsPage> {
                 'id': localId,
                 'LocalReceiptPath': path,
                 'ReceiptUid': (item['ReceiptUid'] ?? '').toString(),
+                if ((item['ReceiptUids'] ?? list[idx]['ReceiptUids']) != null)
+                  'ReceiptUids':
+                      item['ReceiptUids'] ?? list[idx]['ReceiptUids'],
                 'clientHash': ch,
               };
               tableData['Savings'] = list;
@@ -2920,18 +3565,26 @@ class _MainTabsPageState extends State<MainTabsPage> {
     try {
       if (_repo == null) return; // offline only; local already saved
 
+      // Do not upload images to cloud. Keep receipts local only.
+      // Prepare a copy of item for persistence that strips local-only byte/path fields.
+      final persistItem = Map<String, dynamic>.from(item);
+      persistItem.remove('ReceiptBytes');
+      persistItem.remove('LocalReceiptPath');
+      // Keep legacy ReceiptUrl/ReceiptUid if present; otherwise don't upload images
+      // Persist using the cleaned map
+
       if (isUpdate && localId.isNotEmpty) {
         if (collection == 'expenses') {
-          await _repo!.updateExpense(localId, item);
+          await _repo!.updateExpense(localId, persistItem);
         } else {
-          await _repo!.updateSaving(localId, item);
+          await _repo!.updateSaving(localId, persistItem);
         }
       } else {
         late String newId;
         if (collection == 'expenses') {
-          newId = await _repo!.addExpense(item);
+          newId = await _repo!.addExpense(persistItem);
         } else {
-          newId = await _repo!.addSaving(item);
+          newId = await _repo!.addSaving(persistItem);
         }
         if (newId.isNotEmpty && newId != localId) {
           // Update row id and receipt mapping to use newId
@@ -2949,13 +3602,24 @@ class _MainTabsPageState extends State<MainTabsPage> {
                   if (path != null && path.isNotEmpty) 'LocalReceiptPath': path,
                   if ((item['ReceiptUid'] ?? '').toString().isNotEmpty)
                     'ReceiptUid': (item['ReceiptUid'] ?? '').toString(),
+                  // Preserve any multi-image ReceiptUids present on the item or existing entry
+                  if ((item['ReceiptUids'] ?? list[idx]['ReceiptUids']) != null)
+                    'ReceiptUids':
+                        item['ReceiptUids'] ?? list[idx]['ReceiptUids'],
                   'clientHash': ch,
                 };
                 if (path != null) {
                   _localReceiptPathsExpenses.remove(localId);
                   _localReceiptPathsExpenses[newId] = path;
                 }
-                tableData['Expenses'] = list;
+                // DEBUG: migration from localId->newId
+                debugPrint(
+                  'maybeUpload: reconciled id $localId -> $newId; moved path=$path ReceiptUids=${item['ReceiptUids'] ?? list[idx]['ReceiptUids']}',
+                );
+                tableData['Expenses'] = _mergeLocalReceiptsInto(
+                  'expenses',
+                  list,
+                );
               }
             } else {
               final list = List<Map<String, dynamic>>.from(
@@ -2970,13 +3634,16 @@ class _MainTabsPageState extends State<MainTabsPage> {
                   if (path != null && path.isNotEmpty) 'LocalReceiptPath': path,
                   if ((item['ReceiptUid'] ?? '').toString().isNotEmpty)
                     'ReceiptUid': (item['ReceiptUid'] ?? '').toString(),
+                  if ((item['ReceiptUids'] ?? list[idx]['ReceiptUids']) != null)
+                    'ReceiptUids':
+                        item['ReceiptUids'] ?? list[idx]['ReceiptUids'],
                   'clientHash': ch,
                 };
                 if (path != null) {
                   _localReceiptPathsSavings.remove(localId);
                   _localReceiptPathsSavings[newId] = path;
                 }
-                tableData['Savings'] = list;
+                tableData['Savings'] = _mergeLocalReceiptsInto('savings', list);
               }
             }
           });

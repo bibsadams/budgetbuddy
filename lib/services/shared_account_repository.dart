@@ -722,9 +722,16 @@ class SharedAccountRepository {
           : (data['validUntil']?.toString() ?? ''),
       'Note': data['note'],
       // Receipts are large; store as URL in cloud storage ideally.
+      // Single URL (legacy) and plural URLs (new)
       'ReceiptUrl': data['receiptUrl'],
-      // Stable identifier for an attached receipt image (for backup/restore).
+      'ReceiptUrls': (data['receiptUrls'] is List)
+          ? (data['receiptUrls'] as List).whereType<String>().toList()
+          : null,
+      // Stable identifier(s) for attached receipt image(s)
       'ReceiptUid': data['receiptUid'],
+      'ReceiptUids': (data['receiptUids'] is List)
+          ? (data['receiptUids'] as List).whereType<String>().toList()
+          : null,
       'CreatedBy': data['createdBy'],
     };
   }
@@ -770,8 +777,16 @@ class SharedAccountRepository {
           item['ValidUntil'].toString().isNotEmpty)
         'validUntil': _parseDate(item['ValidUntil']),
       'note': item['Note'],
-      'receiptUrl': item['ReceiptUrl'], // files should be uploaded separately
-      // Persist stable receipt uid if present
+      // Prefer plural fields when present (backwards-compatible)
+      if ((item['ReceiptUrls'] ?? item['receiptUrls']) != null)
+        'receiptUrls': item['ReceiptUrls'] ?? item['receiptUrls'],
+      if ((item['ReceiptUids'] ?? item['receiptUids']) != null)
+        'receiptUids': item['ReceiptUids'] ?? item['receiptUids'],
+      // Keep legacy single value for compatibility
+      if ((item['ReceiptUrl'] ?? item['receiptUrl']) != null)
+        'receiptUrl':
+            item['ReceiptUrl'] ??
+            item['receiptUrl'], // files should be uploaded separately
       if ((item['ReceiptUid'] ?? item['receiptUid']) != null)
         'receiptUid': item['ReceiptUid'] ?? item['receiptUid'],
       'createdBy': uid,
@@ -847,7 +862,13 @@ class SharedAccountRepository {
       'Note': data['note']?.toString() ?? '',
       'CreatedBy': data['createdBy'],
       'ReceiptUid': data['receiptUid'],
+      'ReceiptUids': (data['receiptUids'] is List)
+          ? (data['receiptUids'] as List).whereType<String>().toList()
+          : null,
       'ReceiptUrl': data['receiptUrl'],
+      'ReceiptUrls': (data['receiptUrls'] is List)
+          ? (data['receipturls'] as List).whereType<String>().toList()
+          : null,
     };
   }
 
@@ -868,6 +889,11 @@ class SharedAccountRepository {
       'createdBy': uid,
       'updatedAt': FieldValue.serverTimestamp(),
       'createdAt': FieldValue.serverTimestamp(),
+      if ((item['ReceiptUids'] ?? item['receiptUids']) != null)
+        'receiptUids': item['ReceiptUids'] ?? item['receiptUids'],
+      if ((item['ReceiptUrls'] ?? item['receiptUrls']) != null)
+        'receiptUrls': item['ReceiptUrls'] ?? item['receiptUrls'],
+      // backward compat single values
       if ((item['ReceiptUid'] ?? item['receiptUid']) != null)
         'receiptUid': item['ReceiptUid'] ?? item['receiptUid'],
       if ((item['ReceiptUrl'] ?? item['receiptUrl']) != null)
