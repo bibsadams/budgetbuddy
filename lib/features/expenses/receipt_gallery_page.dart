@@ -1087,7 +1087,10 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
 
         // Try to find a matchedUid from the row's ReceiptUids
         String? matchedUid;
-        if (r['ReceiptUids'] is List && accountIdRaw.isNotEmpty) {
+        final hasUidsList =
+            r['ReceiptUids'] is List &&
+            (r['ReceiptUids'] as List).whereType<String>().isNotEmpty;
+        if (hasUidsList && accountIdRaw.isNotEmpty) {
           final ulist = List<String>.from(
             (r['ReceiptUids'] as List).whereType<String>(),
           );
@@ -1113,8 +1116,35 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
           }
         }
 
+        // If still not matched, attempt to derive uid from the filename stem.
+        // Do not require the computed expected path to exactly equal the current
+        // file path (extensions/normalization may differ). We'll accept the stem
+        // as the UID and migrate the row to use this UID moving forward.
+        if (matchedUid == null && src.filePath != null) {
+          final stem = p.basenameWithoutExtension(src.filePath!);
+          if (stem.isNotEmpty) {
+            matchedUid = stem;
+            // Ensure the row lists this uid so future operations are consistent
+            final uids = List<String>.from(
+              (r['ReceiptUids'] as List?)?.whereType<String>() ??
+                  const <String>[],
+            );
+            if (!uids.contains(stem)) {
+              uids.add(stem);
+              r['ReceiptUids'] = uids;
+            }
+          }
+        }
+
         final docId = (r['id'] ?? r['Id'] ?? r['docId'] ?? '').toString();
+        // If still not matched, allow a safe fallback only when there are no
+        // ReceiptUids and the current file equals the preview path. Otherwise require uid.
+        final previewPath = (r['LocalReceiptPath'] ?? '').toString();
+        final allowDocFallback =
+            matchedUid == null && !hasUidsList && src.filePath == previewPath;
+
         String savedPath;
+        final oldFilePath = src.filePath; // used for cache eviction and cleanup
         if (matchedUid != null) {
           savedPath = await LocalReceiptService().saveReceipt(
             accountId: accountId,
@@ -1123,24 +1153,38 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
             bytes: newBytes,
             receiptUid: matchedUid,
           );
-        } else {
+        } else if (allowDocFallback) {
           savedPath = await LocalReceiptService().saveReceipt(
             accountId: accountId,
             collection: 'expenses',
             docId: docId,
             bytes: newBytes,
           );
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Could not resolve this image to the record. Replace aborted.',
+                ),
+              ),
+            );
+          }
+          return;
         }
 
         // Update metadata on the resolved row
-        r['LocalReceiptPath'] = savedPath;
-        r['Receipt'] = newBytes;
+        // Only move preview path if we replaced the same file the preview refers to
+        final curPreview = (r['LocalReceiptPath'] ?? '').toString();
+        if (curPreview == src.filePath) {
+          r['LocalReceiptPath'] = savedPath;
+        }
+        // Do not touch in-memory fields for multi-image records
+        // r['Receipt'] is left unchanged for multi-image flows
         // If we did not preserve a matchedUid, clear ReceiptUids so the
         // gallery will prefer the LocalReceiptPath instead of resolving
         // stale uid-based files that may still point to old images.
-        if (matchedUid == null && r['ReceiptUids'] is List) {
-          r['ReceiptUids'] = <String>[];
-        }
+        // (Not applicable here since we require matchedUid)
 
         await _appendReplaceDebugLog({
           'action': 'replace_file',
@@ -1177,8 +1221,24 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
         }
 
         try {
+          // Evict both new and old paths to ensure fresh render
           PaintingBinding.instance.imageCache.evict(FileImage(File(savedPath)));
+          if (oldFilePath != null && oldFilePath != savedPath) {
+            PaintingBinding.instance.imageCache.evict(
+              FileImage(File(oldFilePath)),
+            );
+          }
         } catch (_) {}
+        // If we migrated from a different on-disk path (e.g., jpeg -> jpg),
+        // remove the old file to avoid duplicates appearing later.
+        if (oldFilePath != null && oldFilePath != savedPath) {
+          try {
+            final f = File(oldFilePath);
+            if (await f.exists()) {
+              await f.delete();
+            }
+          } catch (_) {}
+        }
         setState(() => _images[_curIndex] = _ImgSrc.file(savedPath));
         return;
       } catch (e) {
@@ -1367,11 +1427,12 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
               ? Hive.box('budgetBox')
               : await Hive.openBox('budgetBox');
           final accountId = (box.get('accountId') ?? '') as String;
+          final ulist = List<String>.from(
+            (r['ReceiptUids'] as List).whereType<String>(),
+          );
+          String? matchedUid;
+          // Prefer exact path match when accountId available
           if (accountId.isNotEmpty) {
-            final ulist = List<String>.from(
-              (r['ReceiptUids'] as List).whereType<String>(),
-            );
-            String? matchedUid;
             for (final uid in ulist) {
               try {
                 final expected = await LocalReceiptService().pathForReceiptUid(
@@ -1384,54 +1445,64 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
                   break;
                 }
               } catch (_) {}
-              // Fallback: match by basename containing uid
-              if (matchedUid == null) {
-                final base = p.basename(src.filePath!);
-                if (base == uid || base.startsWith(uid) || base.contains(uid)) {
-                  matchedUid = uid;
-                  break;
-                }
+            }
+          }
+          // Fallback: match by basename containing uid regardless of accountId
+          if (matchedUid == null) {
+            final base = p.basename(src.filePath!);
+            for (final uid in ulist) {
+              if (base == uid || base.startsWith(uid) || base.contains(uid)) {
+                matchedUid = uid;
+                break;
               }
             }
-            if (matchedUid != null) {
-              try {
-                final docId = (r['id'] ?? r['Id'] ?? r['docId'] ?? '')
-                    .toString();
+          }
+          if (matchedUid != null) {
+            // Delete the file: prefer LocalReceiptService when accountId known, else delete directly
+            try {
+              final docId = (r['id'] ?? r['Id'] ?? r['docId'] ?? '').toString();
+              if (accountId.isNotEmpty) {
                 await LocalReceiptService().deleteReceipt(
                   accountId: accountId,
                   collection: 'expenses',
                   docId: docId,
                   receiptUid: matchedUid,
                 );
-              } catch (_) {}
-              final newUlist = List.from(ulist);
-              newUlist.remove(matchedUid);
-              r['ReceiptUids'] = newUlist;
-              // If LocalReceiptPath also pointed to this file (rare in this branch), update it
-              if (lp == src.filePath) {
-                if (newUlist.isEmpty) {
-                  r['LocalReceiptPath'] = null;
-                } else {
-                  try {
-                    final firstPath = await LocalReceiptService()
-                        .pathForReceiptUid(
-                          accountId: accountId,
-                          collection: 'expenses',
-                          receiptUid: newUlist.first,
-                        );
-                    r['LocalReceiptPath'] = firstPath;
-                  } catch (_) {
-                    r['LocalReceiptPath'] = null;
-                  }
+              } else {
+                // Best-effort direct deletion when we can't compute expected path
+                final f = File(src.filePath!);
+                if (await f.exists()) {
+                  await f.delete();
                 }
               }
-              changed = true;
-              try {
-                debugPrint(
-                  'gallery delete: deleted uid=$matchedUid by uid-path/basename match (path != preview) for row=${(r['id'] ?? '').toString()}',
-                );
-              } catch (_) {}
+            } catch (_) {}
+            final newUlist = List.from(ulist);
+            newUlist.remove(matchedUid);
+            r['ReceiptUids'] = newUlist;
+            // If LocalReceiptPath also pointed to this file (rare in this branch), update it
+            if (lp == src.filePath) {
+              if (newUlist.isEmpty) {
+                r['LocalReceiptPath'] = null;
+              } else if (accountId.isNotEmpty) {
+                try {
+                  final firstPath = await LocalReceiptService()
+                      .pathForReceiptUid(
+                        accountId: accountId,
+                        collection: 'expenses',
+                        receiptUid: newUlist.first,
+                      );
+                  r['LocalReceiptPath'] = firstPath;
+                } catch (_) {
+                  r['LocalReceiptPath'] = null;
+                }
+              }
             }
+            changed = true;
+            try {
+              debugPrint(
+                'gallery delete: deleted uid=$matchedUid by uid-path/basename match (path != preview) for row=${(r['id'] ?? '').toString()}',
+              );
+            } catch (_) {}
           }
         } catch (_) {}
       }

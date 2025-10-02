@@ -89,6 +89,32 @@
 			"problemMatcher": [
 				"$dart-analyze"
 			]
+		},
+		{
+			"label": "Flutter Analyze BudgetBuddy",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"analyze",
+				"--no-pub"
+			],
+			"problemMatcher": [
+				"$dart - analyzer"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Flutter Analyze BudgetBuddy",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"analyze",
+				"--no-pub"
+			],
+			"problemMatcher": [
+				"$dart - analyzer"
+			],
+			"group": "build"
 		}
 	]
 }
