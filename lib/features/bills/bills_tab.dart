@@ -207,14 +207,19 @@ class BillsTab extends StatelessWidget {
     );
   }
 
-  static int _notifIdFromIndex(int index) =>
-      5000 + index; // Stable-ish ID base per row
+  // Reserve a large ID range per bill to support multiple reminders per day
+  static int _notifIdFromIndex(int index) => 5000 + index * 1000;
 
   static Iterable<int> _seriesIds(int index) sync* {
     final base = _notifIdFromIndex(index);
-    // Reserve a small range for per-day countdowns
-    for (int i = 0; i < 10; i++) {
+    // New scheme: cancel a wide range reserved per bill
+    for (int i = 0; i < 1000; i++) {
       yield base + i;
+    }
+    // Back-compat: also cancel the older narrow range that used 5000+index+offset
+    final oldBase = 5000 + index;
+    for (int i = 0; i < 20; i++) {
+      yield oldBase + i;
     }
   }
 
@@ -271,13 +276,24 @@ class BillsTab extends StatelessWidget {
             minute,
           );
 
-    int offset = 0;
+    // Configurable notifications per day at fixed local times to avoid crossing midnight
+    const allSlots = <int>[9, 11, 13, 15, 17, 19, 21, 23]; // hours
+    final remindersPerDay = (bill['RemindersPerDay'] is num)
+        ? (bill['RemindersPerDay'] as num).clamp(0, 8).toInt()
+        : 8;
+    final dailySlots = allSlots.take(remindersPerDay).toList();
+    final base = _notifIdFromIndex(index);
+    int dayIndex = 0;
     for (
       DateTime d = start;
       !d.isAfter(due);
       d = d.add(const Duration(days: 1))
     ) {
-      final daysLeft = due.difference(d).inDays;
+      final daysLeft = DateTime(
+        due.year,
+        due.month,
+        due.day,
+      ).difference(DateTime(d.year, d.month, d.day)).inDays;
       String whenLabel;
       if (daysLeft > 1) {
         whenLabel = '$daysLeft days left';
@@ -289,24 +305,31 @@ class BillsTab extends StatelessWidget {
       final title = 'Bill due: $name';
       final body =
           '${NumberFormat.currency(symbol: '₱', decimalDigits: 2).format(amount)} • $whenLabel • due $dateStr $timeStr';
-      await NotificationService().schedule(
-        _notifIdFromIndex(index) + offset,
-        title: title,
-        body: body,
-        firstDateTime: d.isBefore(now)
-            ? now.add(const Duration(minutes: 1))
-            : d,
-        repeat: RepeatIntervalMode.none,
-      );
-      offset++;
+
+      for (int slot = 0; slot < dailySlots.length; slot++) {
+        final slotHour = dailySlots[slot];
+        final dt = DateTime(d.year, d.month, d.day, slotHour, 0);
+        if (dt.isAfter(now)) {
+          final id = base + (dayIndex * dailySlots.length) + slot;
+          await NotificationService().schedule(
+            id,
+            title: title,
+            body: body,
+            firstDateTime: dt,
+            repeat: RepeatIntervalMode.none,
+          );
+        }
+      }
+      dayIndex++;
     }
 
     // Also schedule the main due-time notification with optional repeat rule
     final finalTitle = 'Bill due: $name';
     final finalBody =
         '${NumberFormat.currency(symbol: '₱', decimalDigits: 2).format(amount)} due on $dateStr at $timeStr';
+    // Use a stable high slot within the reserved range for the final due-time reminder
     await NotificationService().schedule(
-      _notifIdFromIndex(index) + 9,
+      _notifIdFromIndex(index) + 999,
       title: finalTitle,
       body: finalBody,
       firstDateTime: due,
@@ -344,6 +367,7 @@ class _BillEditPageState extends State<_BillEditPage> {
   late TextEditingController _note;
   String _repeat = 'None';
   bool _enabled = true;
+  int _remindersPerDay = 8; // default 8 per day
 
   @override
   void initState() {
@@ -364,6 +388,9 @@ class _BillEditPageState extends State<_BillEditPage> {
     _repeat = widget.initial?['Repeat'] ?? 'None';
     _enabled = widget.initial?['Enabled'] ?? true;
     _note = TextEditingController(text: widget.initial?['Note'] ?? '');
+    _remindersPerDay = (widget.initial?['RemindersPerDay'] is num)
+        ? (widget.initial!['RemindersPerDay'] as num).clamp(0, 8).toInt()
+        : 8;
   }
 
   @override
@@ -456,6 +483,7 @@ class _BillEditPageState extends State<_BillEditPage> {
                         'Repeat': _repeat,
                         'Enabled': _enabled,
                         'Note': _note.text.trim(),
+                        'RemindersPerDay': _remindersPerDay,
                         if (widget.initial?['id'] != null)
                           'id': widget.initial!['id'],
                       };
@@ -564,6 +592,30 @@ class _BillEditPageState extends State<_BillEditPage> {
                       ),
                     ),
                     const SizedBox(width: 12),
+                    Expanded(
+                      child: DropdownButtonFormField<int>(
+                        value: _remindersPerDay,
+                        decoration: const InputDecoration(
+                          labelText: 'Reminders per day',
+                          prefixIcon: Icon(Icons.notifications_active_outlined),
+                        ),
+                        items: List.generate(
+                          9,
+                          (i) => DropdownMenuItem(
+                            value: i,
+                            child: Text(i == 0 ? 'Off (0)' : '$i per day'),
+                          ),
+                        ),
+                        onChanged: (v) => setState(
+                          () => _remindersPerDay = (v ?? 8).clamp(0, 8),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
                     Row(
                       children: [
                         const Text('Reminder'),
@@ -597,6 +649,7 @@ class _BillEditPageState extends State<_BillEditPage> {
                         'Repeat': _repeat,
                         'Enabled': _enabled,
                         'Note': _note.text.trim(),
+                        'RemindersPerDay': _remindersPerDay,
                         if (widget.initial?['id'] != null)
                           'id': widget.initial!['id'],
                       };
