@@ -43,8 +43,10 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
   late TextEditingController _noteCtrl;
   final FocusNode _amountFocus = FocusNode();
 
-  Uint8List? _receipt; // in‑memory bytes
-  String? _receiptUid; // existing uid if any
+  // Multi-image parity
+  List<Uint8List> _receipts = [];
+  List<String> _receiptUids = [];
+  String? _receiptUid; // legacy single uid
   bool _loadingExistingReceipt = false;
 
   final DateFormat _humanFmt = DateFormat('MMM d, y h:mm a');
@@ -73,8 +75,13 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
     _noteCtrl = TextEditingController(
       text: widget.record['Note']?.toString() ?? '',
     );
+    // Load existing multi attachments
+    _receiptUids = (widget.record['ReceiptUids'] is List)
+        ? (widget.record['ReceiptUids'] as List).whereType<String>().toList()
+        : <String>[];
     _receiptUid = widget.record['ReceiptUid']?.toString();
-    if (_receiptUid != null && _receiptUid!.isNotEmpty) {
+    if (_receiptUids.isNotEmpty ||
+        (_receiptUid != null && _receiptUid!.isNotEmpty)) {
       _tryLoadLocalReceipt();
     }
   }
@@ -82,15 +89,29 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
   Future<void> _tryLoadLocalReceipt() async {
     setState(() => _loadingExistingReceipt = true);
     try {
-      final path = await LocalReceiptService().pathForReceiptUid(
-        accountId: widget.accountId,
-        collection: 'custom_${widget.tabId}',
-        receiptUid: _receiptUid!,
-      );
-      final f = File(path);
-      if (await f.exists()) {
-        final bytes = await f.readAsBytes();
-        setState(() => _receipt = bytes);
+      final List<Uint8List> found = [];
+      for (final uid
+          in (_receiptUids.isNotEmpty
+              ? _receiptUids
+              : (_receiptUid != null
+                    ? <String>[_receiptUid!]
+                    : const <String>[]))) {
+        try {
+          final path = await LocalReceiptService().pathForReceiptUid(
+            accountId: widget.accountId,
+            collection: 'custom_${widget.tabId}',
+            receiptUid: uid,
+          );
+          final f = File(path);
+          if (await f.exists()) {
+            found.add(await f.readAsBytes());
+          }
+        } catch (_) {}
+      }
+      if (found.isNotEmpty) {
+        setState(() {
+          _receipts = found;
+        });
       }
     } catch (_) {
       // ignore
@@ -176,14 +197,8 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
     setState(() {});
   }
 
-  Future<void> _pickImage(ImageSource source) async {
-    final pickedFile = await ImagePicker().pickImage(
-      source: source,
-      imageQuality: 85,
-    );
-    if (pickedFile == null) return;
-    final raw = await pickedFile.readAsBytes();
-    Uint8List bytes = raw;
+  // Normalize image bytes: fix EXIF orientation and downscale large images.
+  Uint8List _normalizeBytes(Uint8List raw) {
     try {
       final decoded = img.decodeImage(raw);
       if (decoded != null) {
@@ -197,11 +212,37 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
           final newH = (h * scale).round();
           finalImg = img.copyResize(normalized, width: newW, height: newH);
         }
-        bytes = Uint8List.fromList(img.encodeJpg(finalImg, quality: 85));
+        return Uint8List.fromList(img.encodeJpg(finalImg, quality: 85));
       }
     } catch (_) {}
+    return raw;
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    final picker = ImagePicker();
+    if (source == ImageSource.gallery) {
+      // Multi-select from gallery
+      final pickedFiles = await picker.pickMultiImage(imageQuality: 85);
+      if (pickedFiles.isEmpty) return;
+      final List<Uint8List> loaded = [];
+      for (final p in pickedFiles) {
+        final raw = await p.readAsBytes();
+        loaded.add(_normalizeBytes(Uint8List.fromList(raw)));
+      }
+      setState(() {
+        // Append new selections; do NOT clear existing
+        _receipts = List.of(_receipts)..addAll(loaded);
+      });
+      return;
+    }
+
+    // Single capture from camera
+    final pickedFile = await picker.pickImage(source: source, imageQuality: 85);
+    if (pickedFile == null) return;
+    final raw = await pickedFile.readAsBytes();
+    final bytes = _normalizeBytes(Uint8List.fromList(raw));
     setState(() {
-      _receipt = bytes;
+      _receipts = List.of(_receipts)..add(bytes);
     });
   }
 
@@ -268,25 +309,43 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
       'id': widget.record['id'],
     };
 
-    if (_receipt != null) {
-      final receiptUid =
-          _receiptUid ?? 'r_${DateTime.now().microsecondsSinceEpoch}';
-      try {
-        await LocalReceiptService().saveReceipt(
-          accountId: widget.accountId,
-          collection: 'custom_${widget.tabId}',
-          docId: receiptUid,
-          bytes: _receipt!,
-          receiptUid: receiptUid,
-        );
-        out['ReceiptUid'] = receiptUid;
-      } catch (e) {
-        // If saving fails we still proceed without receipt
+    // Persist attachments: prefer multi
+    if (_receipts.isNotEmpty) {
+      final List<String> uids = [];
+      for (int i = 0; i < _receipts.length; i++) {
+        final uid = (_receiptUids.length > i && _receiptUids[i].isNotEmpty)
+            ? _receiptUids[i]
+            : 'r_${DateTime.now().microsecondsSinceEpoch}_$i';
+        try {
+          await LocalReceiptService().saveReceipt(
+            accountId: widget.accountId,
+            collection: 'custom_${widget.tabId}',
+            docId: uid,
+            bytes: _receipts[i],
+            receiptUid: uid,
+          );
+          uids.add(uid);
+        } catch (_) {}
+      }
+      if (uids.isNotEmpty) {
+        out['ReceiptUids'] = uids;
+        out.remove('ReceiptUid');
+        out.remove('ReceiptUrl');
       }
     } else {
-      if (widget.record['ReceiptUid'] != null &&
-          (widget.record['ReceiptUid'] as String).isNotEmpty) {
-        out['ReceiptRemoved'] = true; // signal cleanup
+      // No current receipts: if the original record had any attachments (single, multi, or URLs), mark for removal
+      final hadSingle =
+          (widget.record['ReceiptUid'] as String?)?.isNotEmpty == true;
+      final hadMulti =
+          widget.record['ReceiptUids'] is List &&
+          (widget.record['ReceiptUids'] as List).isNotEmpty;
+      final hadUrlSingle =
+          (widget.record['ReceiptUrl'] as String?)?.isNotEmpty == true;
+      final hadUrlMulti =
+          widget.record['ReceiptUrls'] is List &&
+          (widget.record['ReceiptUrls'] as List).isNotEmpty;
+      if (hadSingle || hadMulti || hadUrlSingle || hadUrlMulti) {
+        out['ReceiptRemoved'] = true;
       }
     }
 
@@ -497,15 +556,36 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
                     ),
                   )
                 else ...[
-                  if (_receipt != null)
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.memory(
-                        _receipt!,
-                        width: MediaQuery.of(context).size.width * 0.9,
-                        height: MediaQuery.of(context).size.height * 0.4,
-                        fit: BoxFit.cover,
-                      ),
+                  if (_receipts.isNotEmpty)
+                    Stack(
+                      alignment: Alignment.topRight,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.memory(
+                            _receipts.first,
+                            width: MediaQuery.of(context).size.width * 0.9,
+                            height: MediaQuery.of(context).size.height * 0.4,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                        if (_receipts.length > 1)
+                          Container(
+                            margin: const EdgeInsets.all(8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black87,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              '+${_receipts.length - 1}',
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                          ),
+                      ],
                     ),
                 ],
                 Wrap(
@@ -515,19 +595,19 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
                     ElevatedButton.icon(
                       onPressed: _showImageSourceSheet,
                       icon: const Icon(Icons.attachment_outlined),
-                      label: Text(
-                        _receipt == null ? 'Attach Image' : 'Change Image',
-                      ),
+                      label: const Text('Attach Image'),
                     ),
-                    if (_receipt != null)
+                    if (_receipts.isNotEmpty)
                       OutlinedButton.icon(
                         onPressed: () => setState(() {
-                          _receipt = null;
+                          _receipts.clear();
+                          _receiptUids.clear();
                           _receiptUid = null;
                         }),
                         icon: const Icon(Icons.delete_outline),
-                        label: const Text('Remove'),
+                        label: const Text('Remove all'),
                       ),
+                    // Removed 'View Receipts' button from edit page; viewing is in details page only
                   ],
                 ),
               ],

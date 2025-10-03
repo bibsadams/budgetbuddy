@@ -9,6 +9,7 @@ import 'package:budgetbuddy/widgets/app_gradient_background.dart';
 import 'package:budgetbuddy/widgets/pressable_neumorphic.dart';
 import 'package:budgetbuddy/features/expenses/receipt_gallery_page.dart';
 import 'package:hive/hive.dart';
+import 'package:budgetbuddy/services/local_receipt_service.dart';
 import 'dart:ui';
 
 class OrTab extends StatefulWidget {
@@ -30,8 +31,6 @@ class OrTab extends StatefulWidget {
 
 class _OrTabState extends State<OrTab> {
   // Match Expenses tab controls/state
-  late final Box _box;
-  String _period = 'this_month';
   String _sort = 'Date (newest)';
   bool _searchExpanded = false;
   final TextEditingController _searchCtrl = TextEditingController();
@@ -40,20 +39,6 @@ class _OrTabState extends State<OrTab> {
   @override
   void initState() {
     super.initState();
-    _box = Hive.box('budgetBox');
-    final saved = _box.get('orSummaryPeriod');
-    if (saved is String &&
-        [
-          'today',
-          'yesterday',
-          'this_week',
-          'this_month',
-          'last_week',
-          'last_month',
-          'all',
-        ].contains(saved)) {
-      _period = saved;
-    }
   }
 
   @override
@@ -62,10 +47,7 @@ class _OrTabState extends State<OrTab> {
     super.dispose();
   }
 
-  void _setPeriod(String p) {
-    setState(() => _period = p);
-    _box.put('orSummaryPeriod', p);
-  }
+  // Period selection removed (no filtering by period in OR tab).
 
   // Parse a DateTime from common formats used across the app
   DateTime? _parseDateFlexible(String raw) {
@@ -131,81 +113,14 @@ class _OrTabState extends State<OrTab> {
     return copy;
   }
 
-  (DateTime, DateTime) _getPeriodRange(String period) {
-    final now = DateTime.now();
-    final todayStart = DateTime(now.year, now.month, now.day);
-    final tomorrowStart = todayStart.add(const Duration(days: 1));
-    final yesterdayStart = todayStart.subtract(const Duration(days: 1));
-    final startOfThisWeek = now
-        .subtract(Duration(days: now.weekday % 7))
-        .copyWith(
-          hour: 0,
-          minute: 0,
-          second: 0,
-          millisecond: 0,
-          microsecond: 0,
-        );
-    final startOfNextWeek = startOfThisWeek.add(const Duration(days: 7));
-    final startOfThisMonth = DateTime(now.year, now.month, 1);
-    final startOfNextMonth = DateTime(now.year, now.month + 1, 1);
-    final startOfLastMonth = DateTime(now.year, now.month - 1, 1);
-    final startOfThisWeekPrev = startOfThisWeek.subtract(
-      const Duration(days: 7),
-    );
-    switch (period) {
-      case 'today':
-        return (todayStart, tomorrowStart);
-      case 'yesterday':
-        return (yesterdayStart, todayStart);
-      case 'this_week':
-        return (startOfThisWeek, startOfNextWeek);
-      case 'last_week':
-        return (startOfThisWeekPrev, startOfThisWeek);
-      case 'last_month':
-        return (startOfLastMonth, startOfThisMonth);
-      case 'this_month':
-      default:
-        return (startOfThisMonth, startOfNextMonth);
-    }
-  }
+  // Period range computation removed.
 
-  double _sumForPeriod(List<Map<String, dynamic>> rows) {
-    double sum = 0.0;
-    if (_period == 'all') {
-      for (final r in rows) {
-        final a = r['Amount'];
-        if (a is num) sum += a.toDouble();
-      }
-      return sum;
-    }
-    final (start, end) = _getPeriodRange(_period);
-    for (final r in rows) {
-      final ds = (r['Date'] ?? '').toString();
-      if (ds.isEmpty) continue;
-      final dt = DateTime.tryParse(ds);
-      if (dt == null) continue;
-      if (!dt.isBefore(start) && dt.isBefore(end)) {
-        final a = r['Amount'];
-        if (a is num) sum += a.toDouble();
-      }
-    }
-    return sum;
-  }
+  // Total computation removed.
 
   List<Map<String, dynamic>> _filteredAndSorted(
     List<Map<String, dynamic>> list,
   ) {
     Iterable<Map<String, dynamic>> it = list;
-    if (_period != 'all') {
-      final (start, end) = _getPeriodRange(_period);
-      it = it.where((r) {
-        final ds = (r['Date'] ?? '').toString();
-        if (ds.isEmpty) return false;
-        final dt = DateTime.tryParse(ds);
-        if (dt == null) return false;
-        return !dt.isBefore(start) && dt.isBefore(end);
-      });
-    }
     final q = _query.trim().toLowerCase();
     if (q.isNotEmpty) {
       it = it.where((r) {
@@ -261,35 +176,14 @@ class _OrTabState extends State<OrTab> {
 
   @override
   Widget build(BuildContext context) {
-    final currency = NumberFormat.currency(symbol: '₱', decimalDigits: 2);
     final allRows = widget.rows;
-    final total = _sumForPeriod(allRows);
-    String periodLabel = switch (_period) {
-      'today' => 'Today',
-      'yesterday' => 'Yesterday',
-      'this_week' => 'This Week',
-      'last_week' => 'Last Week',
-      'last_month' => 'Last Month',
-      'all' => 'All Receipts',
-      _ => 'This Month',
-    };
     final rows = _filteredAndSorted(allRows);
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: AppGradientBackground(
         child: CustomScrollView(
           slivers: [
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                child: _OrSummaryHeader(
-                  periodLabel: periodLabel,
-                  currentPeriodKey: _period,
-                  onChangePeriod: (p) => _setPeriod(p),
-                  totalLabel: currency.format(total),
-                ),
-              ),
-            ),
+            // Removed summary header (period + amount) per design; keep search/sort below.
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -588,11 +482,55 @@ class OrDetailsPage extends StatefulWidget {
 
 class _OrDetailsPageState extends State<OrDetailsPage> {
   late Map<String, dynamic> _record;
+  String? _resolvedPreviewPath; // fallback path resolved from ReceiptUids
 
   @override
   void initState() {
     super.initState();
     _record = Map<String, dynamic>.from(widget.record);
+    _resolvePreviewIfNeeded();
+  }
+
+  Future<void> _resolvePreviewIfNeeded() async {
+    try {
+      final r = _record;
+      final localPath = (r['LocalReceiptPath'] ?? '') as String;
+      final hasBytes =
+          r['ReceiptBytes'] is List &&
+          (r['ReceiptBytes'] as List).whereType<Uint8List>().isNotEmpty;
+      final hasUrl =
+          ((r['ReceiptUrl'] ?? '') as String).isNotEmpty ||
+          ((r['ReceiptUrls'] is List) &&
+              (r['ReceiptUrls'] as List).whereType<String>().isNotEmpty);
+      final hasMem = r['Receipt'] is Uint8List;
+      if (localPath.isNotEmpty || hasBytes || hasUrl || hasMem) return;
+
+      final uids = (r['ReceiptUids'] is List)
+          ? (r['ReceiptUids'] as List).whereType<String>().toList()
+          : const <String>[];
+      if (uids.isEmpty) return;
+
+      final box = Hive.box('budgetBox');
+      final accountId = (box.get('accountId') ?? '') as String;
+      if (accountId.isEmpty) return;
+
+      for (final uid in uids) {
+        try {
+          final path = await LocalReceiptService().pathForReceiptUid(
+            accountId: accountId,
+            collection: 'or',
+            receiptUid: uid,
+          );
+          if (path.isNotEmpty) {
+            if (await File(path).exists()) {
+              if (!mounted) return;
+              setState(() => _resolvedPreviewPath = path);
+              break;
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
   }
 
   @override
@@ -748,6 +686,7 @@ class _OrDetailsPageState extends State<OrDetailsPage> {
 
   Widget _receiptPreview(Map<String, dynamic> rec) {
     final localPath = (rec['LocalReceiptPath'] ?? '') as String;
+    final resolvedPath = _resolvedPreviewPath ?? '';
     final singleUrl = (rec['ReceiptUrl'] ?? '') as String;
     final urls = (rec['ReceiptUrls'] is List)
         ? (rec['ReceiptUrls'] as List).whereType<String>().toList()
@@ -765,12 +704,13 @@ class _OrDetailsPageState extends State<OrDetailsPage> {
         height: MediaQuery.of(context).size.height * 0.4,
         fit: BoxFit.contain,
       );
-    } else if (localPath.isNotEmpty) {
+    } else if (localPath.isNotEmpty || resolvedPath.isNotEmpty) {
       try {
-        PaintingBinding.instance.imageCache.evict(FileImage(File(localPath)));
+        final p = localPath.isNotEmpty ? localPath : resolvedPath;
+        PaintingBinding.instance.imageCache.evict(FileImage(File(p)));
       } catch (_) {}
       w = Image.file(
-        File(localPath),
+        File(localPath.isNotEmpty ? localPath : resolvedPath),
         width: MediaQuery.of(context).size.width * 0.9,
         height: MediaQuery.of(context).size.height * 0.4,
         fit: BoxFit.contain,
@@ -1617,86 +1557,3 @@ Widget _placeholderThumb() => Container(
   child: const Icon(Icons.receipt_long, size: 28),
 );
 // End of OR tab implementation
-
-class _OrSummaryHeader extends StatelessWidget {
-  final String periodLabel;
-  final String totalLabel;
-  final String
-  currentPeriodKey; // today | yesterday | this_week | this_month | last_week | last_month | all
-  final ValueChanged<String> onChangePeriod;
-
-  const _OrSummaryHeader({
-    required this.periodLabel,
-    required this.totalLabel,
-    required this.currentPeriodKey,
-    required this.onChangePeriod,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Theme.of(context).dividerColor.withValues(alpha: 0.2),
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                PopupMenuButton<String>(
-                  tooltip: 'Change period',
-                  onSelected: onChangePeriod,
-                  itemBuilder: (ctx) => const [
-                    PopupMenuItem(value: 'today', child: Text('Today')),
-                    PopupMenuItem(value: 'yesterday', child: Text('Yesterday')),
-                    PopupMenuItem(value: 'this_week', child: Text('This Week')),
-                    PopupMenuItem(
-                      value: 'this_month',
-                      child: Text('This Month'),
-                    ),
-                    PopupMenuItem(value: 'last_week', child: Text('Last Week')),
-                    PopupMenuItem(
-                      value: 'last_month',
-                      child: Text('Last Month'),
-                    ),
-                    PopupMenuItem(value: 'all', child: Text('All Receipts')),
-                  ],
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        periodLabel,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(width: 4),
-                      const Icon(Icons.keyboard_arrow_down, size: 18),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  totalLabel,
-                  style: Theme.of(context).textTheme.headlineSmall!.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: Colors.red,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          const Text(
-            'Official Receipts',
-            style: TextStyle(fontWeight: FontWeight.w600),
-          ),
-        ],
-      ),
-    );
-  }
-}

@@ -494,38 +494,65 @@ class SharedAccountRepository {
     // Support receipt removal/ replacement.
     final docRef = _customTabRecordsCol(tabId).doc(id);
     String? oldReceiptUid;
+    List<String> oldReceiptUids = const <String>[];
     try {
       final existing = await docRef.get();
       if (existing.exists) {
         final data = existing.data();
         if (data != null) {
           oldReceiptUid = data['receiptUid']?.toString();
+          if (data['receiptUids'] is List) {
+            oldReceiptUids = (data['receiptUids'] as List)
+                .whereType<String>()
+                .toList();
+          }
         }
       }
     } catch (_) {}
 
+    final bool hasIncomingSingle =
+        item['ReceiptUid'] is String &&
+        (item['ReceiptUid'] as String).isNotEmpty;
+    final bool hasIncomingMulti =
+        item['ReceiptUids'] is List && (item['ReceiptUids'] as List).isNotEmpty;
     final bool receiptRemoved =
         item['ReceiptRemoved'] == true &&
-        (item['ReceiptUid'] == null || (item['ReceiptUid'] as String).isEmpty);
+        !hasIncomingSingle &&
+        !hasIncomingMulti;
     final hasNewReceipt =
         item['ReceiptUid'] != null &&
         (item['ReceiptUid'] as String).isNotEmpty &&
         item['ReceiptUid'] != oldReceiptUid;
 
     final updateData = _toCustomRecordDoc(item);
-    // If explicitly removed receipt and there was one before, delete local file & clear firestore fields.
-    if (receiptRemoved && oldReceiptUid != null && oldReceiptUid.isNotEmpty) {
-      try {
-        // Best-effort local cleanup
-        await LocalReceiptService().deleteReceipt(
-          accountId: accountId,
-          collection: 'custom_$tabId',
-          docId: oldReceiptUid,
-          receiptUid: oldReceiptUid,
-        );
-      } catch (_) {}
+    // If explicitly removed receipts, clear both single and multi and delete local files
+    if (receiptRemoved) {
+      if (oldReceiptUid != null && oldReceiptUid.isNotEmpty) {
+        try {
+          await LocalReceiptService().deleteReceipt(
+            accountId: accountId,
+            collection: 'custom_$tabId',
+            docId: oldReceiptUid,
+            receiptUid: oldReceiptUid,
+          );
+        } catch (_) {}
+      }
+      if (oldReceiptUids.isNotEmpty) {
+        for (final uid in oldReceiptUids) {
+          try {
+            await LocalReceiptService().deleteReceipt(
+              accountId: accountId,
+              collection: 'custom_$tabId',
+              docId: uid,
+              receiptUid: uid,
+            );
+          } catch (_) {}
+        }
+      }
       updateData['receiptUid'] = FieldValue.delete();
       updateData['receiptUrl'] = FieldValue.delete();
+      updateData['receiptUids'] = FieldValue.delete();
+      updateData['receiptUrls'] = FieldValue.delete();
     }
 
     // If new receipt different from old, optionally cleanup old local file
@@ -866,8 +893,9 @@ class SharedAccountRepository {
           ? (data['receiptUids'] as List).whereType<String>().toList()
           : null,
       'ReceiptUrl': data['receiptUrl'],
+      // Correctly map plural receipt URLs (was using a mis-cased key)
       'ReceiptUrls': (data['receiptUrls'] is List)
-          ? (data['receipturls'] as List).whereType<String>().toList()
+          ? (data['receiptUrls'] as List).whereType<String>().toList()
           : null,
     };
   }

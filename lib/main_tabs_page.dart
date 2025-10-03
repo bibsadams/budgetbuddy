@@ -74,6 +74,8 @@ class _MainTabsPageState extends State<MainTabsPage> {
   List<Map<String, String>> _customTabs = const []; // [{id, title}]
   final List<ScrollController> _customScrolls = [];
   StreamSubscription? _customTabsSub;
+  String?
+  _pendingNavigateCustomTabId; // Navigate to this custom tab when it appears
   Map<String, dynamic>? _accountDoc;
   // Multi-account
   List<String> _linkedAccounts = const [];
@@ -503,6 +505,23 @@ class _MainTabsPageState extends State<MainTabsPage> {
           _ensureCustomScrolls();
         });
         box.put('customTabs_${widget.accountId}', tabs);
+
+        // If we just created a tab, navigate to it once it appears in the stream
+        if (_pendingNavigateCustomTabId != null) {
+          final idx = tabs.indexWhere(
+            (t) => t['id'] == _pendingNavigateCustomTabId,
+          );
+          if (idx >= 0) {
+            // Base pages count = 6 (Home, Expenses, Savings, Bills, OR, Report)
+            final target = 6 + idx;
+            _pageController.animateToPage(
+              target,
+              duration: const Duration(milliseconds: 360),
+              curve: Curves.easeOutCubic,
+            );
+            _pendingNavigateCustomTabId = null;
+          }
+        }
       },
       onError: (_) {
         // keep local cache if stream errors
@@ -1800,11 +1819,17 @@ class _MainTabsPageState extends State<MainTabsPage> {
                 order: _customTabs.length,
               );
               if (!mounted) return;
+              // Remember to navigate when the stream delivers the new tab
+              _pendingNavigateCustomTabId = id;
               // Navigate once the stream pushes new list; optimistic fallback after short delay
               Future.delayed(const Duration(milliseconds: 300), () {
                 if (!mounted) return;
                 final idx = _customTabs.indexWhere((t) => t['id'] == id);
-                final target = idx >= 0 ? (5 + idx) : (5 + _customTabs.length);
+                // Base pages count = 6 (Home, Expenses, Savings, Bills, OR, Report)
+                final baseCount = 6;
+                final target = idx >= 0
+                    ? (baseCount + idx)
+                    : (baseCount + _customTabs.length);
                 _pageController.animateToPage(
                   target,
                   duration: const Duration(milliseconds: 360),
