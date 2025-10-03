@@ -169,29 +169,29 @@ class _ExpensesTabState extends State<ExpensesTab> {
     final id = (r['id'] ?? '').toString();
     if (id.startsWith('local_')) {
       final tail = id.substring(6);
-      final n = int.tryParse(tail);
-      if (n != null) return n;
+      return int.tryParse(tail) ?? 0;
     }
     return 0;
   }
 
-  List<Map<String, dynamic>> _filteredAndSorted() {
-    final list = List<Map<String, dynamic>>.from(widget.rows);
-    final q = _query.trim().toLowerCase();
-    Iterable<Map<String, dynamic>> it = list;
-    // Apply period date filtering first (except for all_expenses which shows everything)
-    if (_period != 'all_expenses') {
-      final (start, end) = _getPeriodRange(_period);
-      it = it.where((r) {
-        final ds = (r['Date'] ?? '').toString();
-        if (ds.isEmpty) {
-          return false; // no date, exclude from period-specific view
-        }
-        final dt = DateTime.tryParse(ds);
-        if (dt == null) return false;
-        return !dt.isBefore(start) && dt.isBefore(end);
-      });
+  int _findOriginalIndex(
+    List<Map<String, dynamic>> rows,
+    Map<String, dynamic> row,
+  ) {
+    // rows and filtered rows share the same map references, so indexOf works
+    final idx = rows.indexOf(row);
+    if (idx != -1) return idx;
+    // fallback by id if present
+    final id = row['id'];
+    if (id != null) {
+      return rows.indexWhere((r) => r['id'] == id);
     }
+    return -1;
+  }
+
+  List<Map<String, dynamic>> _filteredAndSorted() {
+    final q = _query.trim().toLowerCase();
+    Iterable<Map<String, dynamic>> it = widget.rows;
     if (q.isNotEmpty) {
       it = it.where((r) {
         final cat = (r['Category'] ?? '').toString().toLowerCase();
@@ -206,9 +206,7 @@ class _ExpensesTabState extends State<ExpensesTab> {
             ds.contains(q);
       });
     }
-    final list2 = it.toList();
-    int cmpNumDesc(num a, num b) => (b - a).sign.toInt();
-    int cmpNumAsc(num a, num b) => (a - b).sign.toInt();
+    final list2 = it.toList(growable: false);
     DateTime parseDate(Object? v) => _parseDateFlexible(v);
     switch (_sort) {
       case 'Date (oldest)':
@@ -218,18 +216,14 @@ class _ExpensesTabState extends State<ExpensesTab> {
         break;
       case 'Amount (high → low)':
         list2.sort(
-          (a, b) => cmpNumDesc(
-            ((a['Amount'] ?? 0) as num),
-            ((b['Amount'] ?? 0) as num),
-          ),
+          (a, b) =>
+              ((b['Amount'] ?? 0) as num).compareTo((a['Amount'] ?? 0) as num),
         );
         break;
       case 'Amount (low → high)':
         list2.sort(
-          (a, b) => cmpNumAsc(
-            ((a['Amount'] ?? 0) as num),
-            ((b['Amount'] ?? 0) as num),
-          ),
+          (a, b) =>
+              ((a['Amount'] ?? 0) as num).compareTo((b['Amount'] ?? 0) as num),
         );
         break;
       case 'Category (A → Z)':
@@ -261,21 +255,6 @@ class _ExpensesTabState extends State<ExpensesTab> {
         });
     }
     return list2;
-  }
-
-  int _findOriginalIndex(
-    List<Map<String, dynamic>> rows,
-    Map<String, dynamic> row,
-  ) {
-    // rows and filtered rows share the same map references, so indexOf works
-    final idx = rows.indexOf(row);
-    if (idx != -1) return idx;
-    // fallback by id if present
-    final id = row['id'];
-    if (id != null) {
-      return rows.indexWhere((r) => r['id'] == id);
-    }
-    return -1;
   }
 
   @override
@@ -1258,20 +1237,7 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
   @override
   void initState() {
     super.initState();
-    final rawMap =
-        box.get('categories') as Map? ??
-        {
-          'Grocery': [],
-          'House': ['Electricity Bill', 'Water Bill'],
-          'Car': [],
-        };
-
-    categoriesMap = rawMap.map<String, List<String>>((key, value) {
-      final list = (value as List).map((e) => e.toString()).toList();
-      return MapEntry(key.toString(), list);
-    });
-
-    // Merge in sensible defaults without overwriting user data
+    // Load categories; seed defaults only if empty to respect deletions
     final Map<String, List<String>> defaults = {
       'Grocery': [
         'Supermarket',
@@ -1293,29 +1259,16 @@ class _ExpenseEditPageState extends State<ExpenseEditPage> {
         'Palengke',
       ],
     };
-
-    bool changed = false;
-    defaults.forEach((cat, subs) {
-      if (!categoriesMap.containsKey(cat)) {
-        categoriesMap[cat] = List<String>.from(subs);
-        changed = true;
-      } else {
-        final current = categoriesMap[cat]!;
-        if (current.isEmpty) {
-          categoriesMap[cat] = List<String>.from(subs);
-          changed = true;
-        } else {
-          for (final s in subs) {
-            if (!current.contains(s)) {
-              current.add(s);
-              changed = true;
-            }
-          }
-        }
-      }
-    });
-
-    if (changed) {
+    final raw = box.get('categories');
+    if (raw is Map && raw.isNotEmpty) {
+      categoriesMap = raw.map<String, List<String>>(
+        (key, value) => MapEntry(
+          key.toString(),
+          (value as List).map((e) => e.toString()).toList(),
+        ),
+      );
+    } else {
+      categoriesMap = defaults.map((k, v) => MapEntry(k, List<String>.from(v)));
       box.put('categories', categoriesMap);
     }
 

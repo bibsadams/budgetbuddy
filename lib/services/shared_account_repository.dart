@@ -734,6 +734,114 @@ class SharedAccountRepository {
     }, SetOptions(merge: true));
   }
 
+  /// Rename a category across all records in a collection.
+  /// kind: 'expenses' or 'savings'
+  /// Returns number of documents updated.
+  Future<int> renameCategory({
+    required String kind,
+    required String oldName,
+    required String newName,
+  }) async {
+    final col = switch (kind) {
+      'expenses' => _expensesCol,
+      'savings' => _savingsCol,
+      _ => throw ArgumentError('Unsupported kind: $kind'),
+    };
+    // Fetch all docs with the old category name
+    final qs = await col.where('category', isEqualTo: oldName).get();
+    final docs = qs.docs;
+    int updated = 0;
+    const int chunk = 400; // stay below 500 batch limit
+    for (int i = 0; i < docs.length; i += chunk) {
+      final end = (i + chunk < docs.length) ? (i + chunk) : docs.length;
+      final batch = _db.batch();
+      for (int j = i; j < end; j++) {
+        final ref = col.doc(docs[j].id);
+        batch.set(ref, {
+          'category': newName,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        updated++;
+      }
+      await batch.commit();
+    }
+    return updated;
+  }
+
+  /// Rename a subcategory across all records in a collection, limited to a specific category.
+  /// kind: 'expenses' or 'savings'
+  Future<int> renameSubcategory({
+    required String kind,
+    required String category,
+    required String oldName,
+    required String newName,
+  }) async {
+    final col = switch (kind) {
+      'expenses' => _expensesCol,
+      'savings' => _savingsCol,
+      _ => throw ArgumentError('Unsupported kind: $kind'),
+    };
+    // Fetch docs that match both category and subcategory
+    final qs = await col
+        .where('category', isEqualTo: category)
+        .where('subcategory', isEqualTo: oldName)
+        .get();
+    final docs = qs.docs;
+    int updated = 0;
+    const int chunk = 400; // batch write safety
+    for (int i = 0; i < docs.length; i += chunk) {
+      final end = (i + chunk < docs.length) ? (i + chunk) : docs.length;
+      final batch = _db.batch();
+      for (int j = i; j < end; j++) {
+        final ref = col.doc(docs[j].id);
+        batch.set(ref, {
+          'subcategory': newName,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        updated++;
+      }
+      await batch.commit();
+    }
+    return updated;
+  }
+
+  /// Count number of records using a category.
+  Future<int> countCategoryUsage({
+    required String kind,
+    required String name,
+  }) async {
+    final col = switch (kind) {
+      'expenses' => _expensesCol,
+      'savings' => _savingsCol,
+      _ => throw ArgumentError('Unsupported kind: $kind'),
+    };
+    final qs = await col.where('category', isEqualTo: name).limit(1).get();
+    if (qs.docs.isEmpty) return 0;
+    // We only need to know if it's used at all; do a light count
+    // For more accurate count, remove limit and return length (may be heavy)
+    return qs.docs.length;
+  }
+
+  /// Count number of records using a subcategory under a specific category.
+  Future<int> countSubcategoryUsage({
+    required String kind,
+    required String category,
+    required String name,
+  }) async {
+    final col = switch (kind) {
+      'expenses' => _expensesCol,
+      'savings' => _savingsCol,
+      _ => throw ArgumentError('Unsupported kind: $kind'),
+    };
+    final qs = await col
+        .where('category', isEqualTo: category)
+        .where('subcategory', isEqualTo: name)
+        .limit(1)
+        .get();
+    if (qs.docs.isEmpty) return 0;
+    return qs.docs.length;
+  }
+
   Map<String, dynamic> _fromDoc(DocumentSnapshot<Map<String, dynamic>> d) {
     final data = d.data() ?? {};
     return {

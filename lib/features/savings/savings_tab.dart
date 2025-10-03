@@ -1106,23 +1106,7 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
   @override
   void initState() {
     super.initState();
-    final rawMap =
-        box.get('savingsCategories') as Map? ??
-        {
-          'Education': ['Tuition', 'Books', 'Supplies'],
-          'Kids': ['Allowance', 'School', 'Toys'],
-          'Travel': ['Flights', 'Hotel', 'Activities'],
-          'Emergency Fund': ['Contribution'],
-          'Home': ['Down Payment', 'Renovation'],
-          'Personal': ['Gadgets', 'Hobby'],
-        };
-
-    categoriesMap = rawMap.map<String, List<String>>((key, value) {
-      final list = (value as List).map((e) => e.toString()).toList();
-      return MapEntry(key.toString(), list);
-    });
-
-    // Merge helpful defaults without overwriting user data
+    // Load categories from Hive; seed defaults only if empty to respect deletions
     final Map<String, List<String>> defaults = {
       'Education': ['Tuition', 'Books', 'Supplies'],
       'Kids': ['Allowance', 'School', 'Toys'],
@@ -1134,29 +1118,16 @@ class _SavingsEditPageState extends State<SavingsEditPage> {
       // Newly requested Compensation category
       'Compensation': ['Salary', 'Bonus', 'Incentive', 'Reimbursement'],
     };
-
-    bool changed = false;
-    defaults.forEach((cat, subs) {
-      if (!categoriesMap.containsKey(cat)) {
-        categoriesMap[cat] = List<String>.from(subs);
-        changed = true;
-      } else {
-        final current = categoriesMap[cat]!;
-        if (current.isEmpty) {
-          categoriesMap[cat] = List<String>.from(subs);
-          changed = true;
-        } else {
-          for (final s in subs) {
-            if (!current.contains(s)) {
-              current.add(s);
-              changed = true;
-            }
-          }
-        }
-      }
-    });
-
-    if (changed) {
+    final raw = box.get('savingsCategories');
+    if (raw is Map && raw.isNotEmpty) {
+      categoriesMap = raw.map<String, List<String>>(
+        (key, value) => MapEntry(
+          key.toString(),
+          (value as List).map((e) => e.toString()).toList(),
+        ),
+      );
+    } else {
+      categoriesMap = defaults.map((k, v) => MapEntry(k, List<String>.from(v)));
       box.put('savingsCategories', categoriesMap);
     }
 

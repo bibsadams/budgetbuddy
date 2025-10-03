@@ -25,6 +25,7 @@ import 'features/report/report_tab.dart';
 import 'manage_accounts_page.dart';
 import 'join_requests_page.dart';
 import 'widgets/app_gradient_background.dart';
+import 'features/categories/categories_manager_page.dart';
 
 class MainTabsPage extends StatefulWidget {
   final String accountId;
@@ -2100,6 +2101,20 @@ class _MainTabsPageState extends State<MainTabsPage> {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
           child: Text('App', style: Theme.of(context).textTheme.titleMedium),
+        ),
+        ListTile(
+          leading: const Icon(Icons.category_outlined),
+          title: const Text('Categories'),
+          subtitle: const Text('Browse categories and subcategories'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () async {
+            await Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) =>
+                    CategoriesManagerPage(accountId: widget.accountId),
+              ),
+            );
+          },
         ),
         ListTile(
           leading: const Icon(Icons.cloud_done_outlined),
