@@ -45,6 +45,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
   Stream<List<Map<String, dynamic>>>? _expenses$;
   Stream<List<Map<String, dynamic>>>? _savings$;
   Stream<List<Map<String, dynamic>>>? _bills$;
+  Stream<List<Map<String, dynamic>>>? _or$;
   Stream<Map<String, dynamic>>? _meta$;
   Stream<Map<String, dynamic>?>? _account$;
 
@@ -57,6 +58,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
   // Local-only receipt maps
   final Map<String, String> _localReceiptPathsExpenses = {};
   final Map<String, String> _localReceiptPathsSavings = {};
+  final Map<String, String> _localReceiptPathsOr = {};
 
   // UI
   int _index = 0;
@@ -277,6 +279,48 @@ class _MainTabsPageState extends State<MainTabsPage> {
       tableData['Bills'] = [];
     }
 
+    // OR: keep a per-account offline store; migrate from legacy tableData if needed
+    List? offlineOr = box.get('offline_or_${widget.accountId}') as List?;
+    if (offlineOr == null || offlineOr.isEmpty) {
+      final legacyOr = (rawTableData?["OR"]) as List?; // from older builds
+      if (legacyOr is List && legacyOr.isNotEmpty) {
+        // Normalize and persist to new per-account key
+        final normalized = legacyOr
+            .whereType<Map>()
+            .map<Map<String, dynamic>>(
+              (m) => m.map((k, v) => MapEntry(k.toString(), v)),
+            )
+            .toList();
+        tableData['OR'] = normalized;
+        box.put('offline_or_${widget.accountId}', normalized);
+      } else {
+        tableData['OR'] = [];
+      }
+    } else {
+      tableData['OR'] = offlineOr
+          .whereType<Map>()
+          .map<Map<String, dynamic>>(
+            (m) => m.map((k, v) => MapEntry(k.toString(), v)),
+          )
+          .toList();
+    }
+
+    // Load OR local receipt preview paths map and overlay into rows
+    final lrOr = box.get('localReceipts_or_${widget.accountId}') as Map?;
+    _localReceiptPathsOr.clear();
+    if (lrOr != null) {
+      lrOr.forEach((k, v) => _localReceiptPathsOr[k.toString()] = v.toString());
+    }
+    final orList = List<Map<String, dynamic>>.from(tableData['OR'] ?? []);
+    for (int i = 0; i < orList.length; i++) {
+      final id = (orList[i]['id'] ?? '').toString();
+      final p = _localReceiptPathsOr[id];
+      if (p != null && p.isNotEmpty) {
+        orList[i] = {...orList[i], 'LocalReceiptPath': p};
+      }
+    }
+    tableData['OR'] = _mergeLocalReceiptsIntoOr(orList);
+
     // Limits/goals
     final rawTabLimits = box.get('tabLimits') as Map?;
     tabLimits = {};
@@ -360,6 +404,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
     tb.remove('Savings');
     tb.remove('Report');
     tb.remove('Bills');
+    tb.remove('OR');
     box.put('tableData', tb);
 
     // Persist offline expenses/savings
@@ -381,10 +426,16 @@ class _MainTabsPageState extends State<MainTabsPage> {
       'localReceipts_savings_${widget.accountId}',
       _localReceiptPathsSavings,
     );
+    box.put('localReceipts_or_${widget.accountId}', _localReceiptPathsOr);
     // Persist Bills per account
     box.put(
       'offline_bills_${widget.accountId}',
       tableData['Bills'] ?? <Map<String, dynamic>>[],
+    );
+    // Persist OR per account
+    box.put(
+      'offline_or_${widget.accountId}',
+      tableData['OR'] ?? <Map<String, dynamic>>[],
     );
     // Persist Custom Tabs list per account
     box.put('customTabs_${widget.accountId}', _customTabs);
@@ -428,6 +479,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
     _repo = SharedAccountRepository(accountId: widget.accountId, uid: user.uid);
     _expenses$ = _repo!.expensesStream();
     _savings$ = _repo!.savingsStream();
+    _or$ = _repo!.orStream();
     _bills$ = _repo!.billsStream();
     _meta$ = _repo!.metaStream();
     _account$ = _repo!.accountStream();
@@ -659,6 +711,52 @@ class _MainTabsPageState extends State<MainTabsPage> {
         );
       });
       _saveLocalOnly();
+    });
+
+    // OR remote sync: merge remote with any local-only rows then persist offline snapshot
+    _or$!.listen((remoteRows) {
+      final remote = List<Map<String, dynamic>>.from(remoteRows);
+      final local = List<Map<String, dynamic>>.from(tableData['OR'] ?? []);
+      final remoteById = {
+        for (final r in remote)
+          if ((r['id'] ?? '').toString().isNotEmpty) (r['id'] as String): r,
+      };
+      // Overlay local preview paths and carry forward ReceiptUids if remote lacks them
+      final mergedRemote = <Map<String, dynamic>>[];
+      final localById = {
+        for (final r in local)
+          if ((r['id'] ?? '').toString().isNotEmpty) (r['id'] as String): r,
+      };
+      for (final r in remote) {
+        final id = (r['id'] ?? '').toString();
+        Map<String, dynamic> out = r;
+        final p = _localReceiptPathsOr[id];
+        if (p != null && p.isNotEmpty) {
+          out = {...out, 'LocalReceiptPath': p};
+        }
+        final l = localById[id];
+        if ((out['ReceiptUids'] == null ||
+                (out['ReceiptUids'] is List &&
+                    (out['ReceiptUids'] as List).isEmpty)) &&
+            l != null &&
+            l['ReceiptUids'] is List &&
+            (l['ReceiptUids'] as List).isNotEmpty) {
+          out = {...out, 'ReceiptUids': List<String>.from(l['ReceiptUids'])};
+        }
+        mergedRemote.add(out);
+      }
+      // Keep local-only (no id or id not in remote)
+      final extras = local.where((r) {
+        final id = (r['id'] ?? '').toString();
+        return id.isEmpty || !remoteById.containsKey(id);
+      });
+      final merged = [...mergedRemote, ...extras];
+      setState(() {
+        tableData['OR'] = _mergeLocalReceiptsIntoOr(merged);
+      });
+      try {
+        box.put('offline_or_${widget.accountId}', tableData['OR']);
+      } catch (_) {}
     });
     _savings$!.listen((remoteRows) {
       if (remoteRows.isEmpty) {
@@ -979,6 +1077,57 @@ class _MainTabsPageState extends State<MainTabsPage> {
         'mergeLocalReceiptsInto: collection=$collection incoming=${incoming.length} out=${out.length} preservedReceiptRows=$preservedCount localPathRows=$localPathCount',
       );
     } catch (_) {}
+    return out;
+  }
+
+  // OR-specific merge: overlay LocalReceiptPath from cache and preserve ReceiptUids
+  List<Map<String, dynamic>> _mergeLocalReceiptsIntoOr(
+    List<Map<String, dynamic>> incoming,
+  ) {
+    final out = <Map<String, dynamic>>[];
+    final existing = Map<String, Map<String, dynamic>>.fromEntries(
+      (tableData['OR'] ?? [])
+          .where((e) => (e['id'] ?? '').toString().isNotEmpty)
+          .map((e) => MapEntry((e['id'] as String).toString(), e)),
+    );
+    for (final r in incoming) {
+      final id = (r['id'] ?? '').toString();
+      var merged = Map<String, dynamic>.from(r);
+      // Overlay preview path from cache when not provided
+      final hasPath = ((merged['LocalReceiptPath'] ?? '') as String)
+          .toString()
+          .isNotEmpty;
+      if (!hasPath && _localReceiptPathsOr.containsKey(id)) {
+        merged['LocalReceiptPath'] = _localReceiptPathsOr[id];
+      }
+      // Preserve prior ReceiptUids unless explicitly cleared with an empty list and no other attachments
+      final providesUids = merged.containsKey('ReceiptUids');
+      final uidsIsList = merged['ReceiptUids'] is List;
+      final explicitEmpty =
+          providesUids && uidsIsList && (merged['ReceiptUids'] as List).isEmpty;
+      final hasAnyAttach =
+          ((merged['LocalReceiptPath'] ?? '') as String)
+              .toString()
+              .isNotEmpty ||
+          ((merged['ReceiptUrl'] ?? '') as String).toString().isNotEmpty ||
+          (merged['ReceiptUrls'] is List &&
+              (merged['ReceiptUrls'] as List).isNotEmpty) ||
+          (merged['Receipt'] is Uint8List) ||
+          (merged['ReceiptBytes'] is List &&
+              (merged['ReceiptBytes'] as List).isNotEmpty);
+      final removalIntent = explicitEmpty && !hasAnyAttach;
+      if (!removalIntent && existing.containsKey(id)) {
+        final prev = existing[id]!;
+        if (prev['ReceiptUids'] is List &&
+            (prev['ReceiptUids'] as List).isNotEmpty &&
+            (!providesUids || !uidsIsList || explicitEmpty)) {
+          merged['ReceiptUids'] = List<String>.from(
+            prev['ReceiptUids'] as List,
+          );
+        }
+      }
+      out.add(merged);
+    }
     return out;
   }
 
@@ -3720,17 +3869,168 @@ class _MainTabsPageState extends State<MainTabsPage> {
 
   // OR (Official Receipts) - mirrors savings style minimal for now
   Widget _buildOrPage() {
-    final rows = tableData['OR'] ?? [];
+    final rawOr = tableData['OR'] ?? [];
+    // Always overlay local receipt paths for OR similar to Expenses
+    final rows = rawOr.map<Map<String, dynamic>>((r) {
+      final id = (r['id'] ?? '').toString();
+      final lp = _localReceiptPathsOr[id];
+      if (lp != null && lp.isNotEmpty) return {...r, 'LocalReceiptPath': lp};
+      return r;
+    }).toList();
     final expensesRows = tableData['Expenses'] ?? [];
     return OrTab(
       rows: rows,
       expensesRows: expensesRows,
-      onRowsChanged: (newRows) {
+      onRowsChanged: (newRows) async {
+        // Immediate UI update preserving local receipt metadata
         setState(() {
-          tableData['OR'] = List<Map<String, dynamic>>.from(newRows);
+          tableData['OR'] = _mergeLocalReceiptsIntoOr(
+            List<Map<String, dynamic>>.from(newRows),
+          );
         });
         _saveLocalOnly();
-        // Firestore sync attempt
+
+        // Immediately persist attachments for appended rows
+        final prevLen = rawOr.length;
+        final addedCount = newRows.length - prevLen;
+        if (addedCount > 0) {
+          for (int i = prevLen; i < newRows.length; i++) {
+            // Handle both legacy single and multi-image bytes
+            final item = Map<String, dynamic>.from(newRows[i]);
+            final hasSingle = item['Receipt'] is Uint8List;
+            final hasMulti =
+                item['ReceiptBytes'] is List &&
+                (item['ReceiptBytes'] as List).isNotEmpty;
+            if (!hasSingle && !hasMulti) continue;
+            String id = (item['id'] as String?) ?? '';
+            if (id.isEmpty)
+              id = 'local_${DateTime.now().millisecondsSinceEpoch}';
+            final lrs = LocalReceiptService();
+            String? firstPath;
+            final uids = <String>[];
+            if (hasMulti) {
+              final List raw = item['ReceiptBytes'] as List;
+              for (final b in raw) {
+                if (b is! Uint8List) continue;
+                final uid = _genReceiptUid();
+                final path = await lrs.saveReceipt(
+                  accountId: widget.accountId,
+                  collection: 'or',
+                  docId: id,
+                  bytes: b,
+                  receiptUid: uid,
+                );
+                firstPath ??= path;
+                uids.add(uid);
+              }
+              if (uids.isNotEmpty) item['ReceiptUids'] = uids;
+              item.remove('ReceiptBytes');
+            } else if (hasSingle) {
+              String uid = (item['ReceiptUid'] ?? '').toString();
+              if (uid.isEmpty) uid = _genReceiptUid();
+              final path = await lrs.saveReceipt(
+                accountId: widget.accountId,
+                collection: 'or',
+                docId: id,
+                bytes: item['Receipt'] as Uint8List,
+                receiptUid: uid,
+              );
+              firstPath = path;
+              uids.add(uid);
+            }
+            if (firstPath != null) _localReceiptPathsOr[id] = firstPath;
+            newRows[i] = {
+              ...newRows[i],
+              'id': id,
+              if (firstPath != null) 'LocalReceiptPath': firstPath,
+              if (uids.isNotEmpty) 'ReceiptUids': uids,
+              if (uids.isNotEmpty) 'ReceiptUid': uids.first,
+            };
+          }
+          setState(() {
+            tableData['OR'] = _mergeLocalReceiptsIntoOr(
+              List<Map<String, dynamic>>.from(newRows),
+            );
+          });
+          _saveLocalOnly();
+        }
+
+        // Robust fallback: ensure any row with bytes has a local file (single or multi)
+        for (int i = 0; i < newRows.length; i++) {
+          final item = Map<String, dynamic>.from(newRows[i]);
+          String id = (item['id'] as String?) ?? '';
+          if (id.isEmpty) id = 'local_${DateTime.now().millisecondsSinceEpoch}';
+
+          final hasSingle = item['Receipt'] is Uint8List;
+          final hasMulti =
+              item['ReceiptBytes'] is List &&
+              (item['ReceiptBytes'] as List).isNotEmpty;
+          final hasLocalPath =
+              ((item['LocalReceiptPath'] ?? '') as String).isNotEmpty;
+
+          // Persist multi-image attachments
+          if (hasMulti) {
+            final lrs = LocalReceiptService();
+            String? firstPath;
+            final uids = <String>[];
+            final List raw = item['ReceiptBytes'] as List;
+            for (final b in raw) {
+              if (b is! Uint8List) continue;
+              final uid = _genReceiptUid();
+              try {
+                final path = await lrs.saveReceipt(
+                  accountId: widget.accountId,
+                  collection: 'or',
+                  docId: id,
+                  bytes: b,
+                  receiptUid: uid,
+                );
+                firstPath ??= path;
+                uids.add(uid);
+              } catch (_) {}
+            }
+            if (firstPath != null) _localReceiptPathsOr[id] = firstPath;
+            newRows[i] = {
+              ...newRows[i],
+              'id': id,
+              if (firstPath != null) 'LocalReceiptPath': firstPath,
+              if (uids.isNotEmpty) 'ReceiptUids': uids,
+              if (uids.isNotEmpty) 'ReceiptUid': uids.first,
+            };
+            // Clear in-memory bytes after persisting
+            newRows[i].remove('ReceiptBytes');
+          }
+
+          // Persist legacy single-image attachment if no local path yet
+          if (hasSingle && !hasLocalPath) {
+            String uid = (item['ReceiptUid'] ?? '').toString();
+            if (uid.isEmpty) uid = _genReceiptUid();
+            try {
+              final path = await LocalReceiptService().saveReceipt(
+                accountId: widget.accountId,
+                collection: 'or',
+                docId: id,
+                bytes: item['Receipt'] as Uint8List,
+                receiptUid: uid,
+              );
+              _localReceiptPathsOr[id] = path;
+              newRows[i] = {
+                ...newRows[i],
+                'id': id,
+                'LocalReceiptPath': path,
+                'ReceiptUid': uid,
+              };
+            } catch (_) {}
+          }
+        }
+        setState(() {
+          tableData['OR'] = _mergeLocalReceiptsIntoOr(
+            List<Map<String, dynamic>>.from(newRows),
+          );
+        });
+        _saveLocalOnly();
+
+        // Firestore sync
         Future(() async {
           if (_repo == null) return;
           final prev = rows;
@@ -3747,9 +4047,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
                   r,
                   withId: id.isEmpty ? null : id,
                 );
-                if (id.isEmpty) {
-                  r['id'] = assigned;
-                }
+                if (id.isEmpty) r['id'] = assigned;
               } else {
                 await _repo!.updateOr(id, r);
               }
@@ -3757,7 +4055,6 @@ class _MainTabsPageState extends State<MainTabsPage> {
               if (mounted) _showCloudWarning(e);
             }
           }
-          // deletions
           final nextIds = {
             for (final r in newRows)
               if ((r['id'] ?? '').toString().isNotEmpty) (r['id'] as String),

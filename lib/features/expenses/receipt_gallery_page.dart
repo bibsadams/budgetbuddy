@@ -18,6 +18,8 @@ class ReceiptGalleryPage extends StatefulWidget {
   final Future<void> Function(Map<String, dynamic> updated)? onEdit;
   final Future<void> Function(Map<String, dynamic> updated)? onReplace;
   final List<Map<String, dynamic>>? resolveRows;
+  // Target collection for receipts (e.g., 'expenses', 'savings', 'or'). Defaults to 'expenses'.
+  final String collection;
 
   const ReceiptGalleryPage({
     super.key,
@@ -26,6 +28,7 @@ class ReceiptGalleryPage extends StatefulWidget {
     this.onEdit,
     this.onReplace,
     this.resolveRows,
+    this.collection = 'expenses',
   });
 
   @override
@@ -36,6 +39,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
   static const _mediaStoreChannel = MethodChannel('budgetbuddy/media_store');
   late final List<_ImgSrc> _images;
   late int _curIndex;
+  late final PageController _pageController;
   Map<String, dynamic>? _pendingUndo; // holds last undo payload
 
   bool _bytesEqual(Uint8List a, Uint8List b) {
@@ -49,6 +53,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
     super.initState();
     _curIndex = widget.initialIndex;
     _images = [];
+    _pageController = PageController(initialPage: _curIndex);
     // DEBUG: log incoming rows for gallery
     try {
       final summary = widget.rows.map((r) {
@@ -133,6 +138,14 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
 
     // Resolve any ReceiptUids to local file paths asynchronously and append them.
     _resolveReceiptUids(widget.resolveRows ?? widget.rows);
+  }
+
+  @override
+  void dispose() {
+    try {
+      _pageController.dispose();
+    } catch (_) {}
+    super.dispose();
   }
 
   // Returns true when running on Android API < 29 (Q) where WRITE_EXTERNAL_STORAGE
@@ -303,7 +316,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
                 receiptUid.isNotEmpty) {
               restoredPath = await LocalReceiptService().saveReceipt(
                 accountId: accountId,
-                collection: 'expenses',
+                collection: widget.collection,
                 docId: docId,
                 bytes: bytes,
                 receiptUid: receiptUid,
@@ -317,7 +330,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
             } else {
               restoredPath = await LocalReceiptService().saveReceipt(
                 accountId: accountId,
-                collection: 'expenses',
+                collection: widget.collection,
                 docId: docId,
                 bytes: bytes,
               );
@@ -379,7 +392,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
           if (oldBytes != null && accountId.isNotEmpty) {
             final restoredPath = await LocalReceiptService().saveReceipt(
               accountId: accountId,
-              collection: 'expenses',
+              collection: widget.collection,
               docId: docId,
               bytes: oldBytes,
               receiptUid: matchedUid,
@@ -433,7 +446,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
             try {
               final path = await LocalReceiptService().pathForReceiptUid(
                 accountId: accountId,
-                collection: 'expenses',
+                collection: widget.collection,
                 receiptUid: uid,
               );
               try {
@@ -535,7 +548,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
                 if (haveAccountId) {
                   path = await LocalReceiptService().pathForReceiptUid(
                     accountId: accountId,
-                    collection: 'expenses',
+                    collection: widget.collection,
                     receiptUid: uid,
                   );
                   try {
@@ -636,7 +649,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
         ],
       ),
       body: PageView.builder(
-        controller: PageController(initialPage: _curIndex),
+        controller: _pageController,
         onPageChanged: (i) => setState(() => _curIndex = i),
         itemCount: _images.length,
         itemBuilder: (context, idx) {
@@ -1105,7 +1118,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
             try {
               final expected = await LocalReceiptService().pathForReceiptUid(
                 accountId: accountId,
-                collection: 'expenses',
+                collection: widget.collection,
                 receiptUid: uid,
               );
               if (expected == src.filePath) {
@@ -1148,7 +1161,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
         if (matchedUid != null) {
           savedPath = await LocalReceiptService().saveReceipt(
             accountId: accountId,
-            collection: 'expenses',
+            collection: widget.collection,
             docId: docId,
             bytes: newBytes,
             receiptUid: matchedUid,
@@ -1156,7 +1169,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
         } else if (allowDocFallback) {
           savedPath = await LocalReceiptService().saveReceipt(
             accountId: accountId,
-            collection: 'expenses',
+            collection: widget.collection,
             docId: docId,
             bytes: newBytes,
           );
@@ -1303,7 +1316,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
                   final expected = await LocalReceiptService()
                       .pathForReceiptUid(
                         accountId: accountId,
-                        collection: 'expenses',
+                        collection: widget.collection,
                         receiptUid: uid,
                       );
                   if (expected == src.filePath) {
@@ -1331,7 +1344,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
                       .toString();
                   await LocalReceiptService().deleteReceipt(
                     accountId: accountId,
-                    collection: 'expenses',
+                    collection: widget.collection,
                     docId: docId,
                     receiptUid: matchedUid,
                   );
@@ -1349,7 +1362,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
                     final firstPath = await LocalReceiptService()
                         .pathForReceiptUid(
                           accountId: accountId,
-                          collection: 'expenses',
+                          collection: widget.collection,
                           receiptUid: newUlist.first,
                         );
                     r['LocalReceiptPath'] = firstPath;
@@ -1384,7 +1397,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
                     .toString();
                 await LocalReceiptService().deleteReceipt(
                   accountId: accountId,
-                  collection: 'expenses',
+                  collection: widget.collection,
                   docId: docId,
                 );
               } catch (_) {}
@@ -1437,7 +1450,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
               try {
                 final expected = await LocalReceiptService().pathForReceiptUid(
                   accountId: accountId,
-                  collection: 'expenses',
+                  collection: widget.collection,
                   receiptUid: uid,
                 );
                 if (expected == src.filePath) {
@@ -1464,7 +1477,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
               if (accountId.isNotEmpty) {
                 await LocalReceiptService().deleteReceipt(
                   accountId: accountId,
-                  collection: 'expenses',
+                  collection: widget.collection,
                   docId: docId,
                   receiptUid: matchedUid,
                 );
@@ -1488,7 +1501,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
                   final firstPath = await LocalReceiptService()
                       .pathForReceiptUid(
                         accountId: accountId,
-                        collection: 'expenses',
+                        collection: widget.collection,
                         receiptUid: newUlist.first,
                       );
                   r['LocalReceiptPath'] = firstPath;
@@ -1580,7 +1593,7 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
               for (final uid in prevUids) {
                 final expected = await LocalReceiptService().pathForReceiptUid(
                   accountId: accountId,
-                  collection: 'expenses',
+                  collection: widget.collection,
                   receiptUid: uid,
                 );
                 if (expected == src.filePath) {
