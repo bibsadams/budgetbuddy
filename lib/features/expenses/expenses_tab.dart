@@ -52,6 +52,8 @@ class _ExpensesTabState extends State<ExpensesTab> {
     final saved = _box.get('expensesSummaryPeriod');
     if (saved is String &&
         [
+          'today',
+          'yesterday',
           'this_week',
           'this_month',
           'last_week',
@@ -135,6 +137,30 @@ class _ExpensesTabState extends State<ExpensesTab> {
     return sum;
   }
 
+  // Like _sumForPeriod but for an explicit period key instead of using _period.
+  double _sumForPeriodWithKey(String period, List<Map<String, dynamic>> rows) {
+    double sum = 0.0;
+    if (period == 'all_expenses') {
+      for (final row in rows) {
+        final a = row['Amount'];
+        if (a is num) sum += a.toDouble();
+      }
+      return sum;
+    }
+    final (start, end) = _getPeriodRange(period);
+    for (final row in rows) {
+      final ds = (row['Date'] ?? '').toString();
+      if (ds.isEmpty) continue;
+      final dt = DateTime.tryParse(ds);
+      if (dt == null) continue;
+      final include = !dt.isBefore(start) && dt.isBefore(end);
+      if (!include) continue;
+      final a = row['Amount'];
+      if (a is num) sum += a.toDouble();
+    }
+    return sum;
+  }
+
   String _limitPercentKeyForPeriod(String period) {
     switch (period) {
       case 'this_week':
@@ -192,6 +218,17 @@ class _ExpensesTabState extends State<ExpensesTab> {
   List<Map<String, dynamic>> _filteredAndSorted() {
     final q = _query.trim().toLowerCase();
     Iterable<Map<String, dynamic>> it = widget.rows;
+    // Apply period filter first (except for 'all_expenses')
+    if (_period != 'all_expenses') {
+      final (start, end) = _getPeriodRange(_period);
+      it = it.where((r) {
+        final ds = (r['Date'] ?? '').toString();
+        if (ds.isEmpty) return false;
+        final dt = DateTime.tryParse(ds);
+        if (dt == null) return false;
+        return !dt.isBefore(start) && dt.isBefore(end);
+      });
+    }
     if (q.isNotEmpty) {
       it = it.where((r) {
         final cat = (r['Category'] ?? '').toString().toLowerCase();
@@ -284,7 +321,12 @@ class _ExpensesTabState extends State<ExpensesTab> {
     }
     double? effectiveLimit;
     if (percent > 0 && widget.savingsRows != null) {
-      final periodSavings = _sumForPeriod(widget.savingsRows!);
+      // Compute limit based on selected-period savings, but if that window has
+      // no savings (common for 'today'/'yesterday'), fallback to 'this_month'.
+      double periodSavings = _sumForPeriodWithKey(_period, widget.savingsRows!);
+      if (periodSavings <= 0) {
+        periodSavings = _sumForPeriodWithKey('this_month', widget.savingsRows!);
+      }
       effectiveLimit = (percent / 100.0) * periodSavings;
     }
     if (effectiveLimit != null && effectiveLimit <= 0) {

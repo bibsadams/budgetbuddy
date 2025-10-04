@@ -4272,6 +4272,9 @@ class _PillTabsState extends State<_PillTabs>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
   late final Animation<double> _bounce;
+  final ScrollController _scroll = ScrollController();
+  bool _atStart = true;
+  bool _atEnd = false;
 
   @override
   void initState() {
@@ -4286,6 +4289,13 @@ class _PillTabsState extends State<_PillTabs>
         TweenSequenceItem(tween: Tween(begin: 1.06, end: 1.0), weight: 40),
       ],
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
+
+    // Ensure initially selected tab is visible
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _ensureSelectedVisible(animate: false);
+    });
+
+    _scroll.addListener(_onScrollChanged);
   }
 
   @override
@@ -4293,11 +4303,14 @@ class _PillTabsState extends State<_PillTabs>
     super.didUpdateWidget(oldWidget);
     if (oldWidget.currentIndex != widget.currentIndex) {
       _controller.forward(from: 0);
+      _ensureSelectedVisible();
     }
   }
 
   @override
   void dispose() {
+    _scroll.removeListener(_onScrollChanged);
+    _scroll.dispose();
     _controller.dispose();
     super.dispose();
   }
@@ -4305,106 +4318,260 @@ class _PillTabsState extends State<_PillTabs>
   @override
   Widget build(BuildContext context) {
     final count = widget.destinations.length;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final width = constraints.maxWidth;
-        final itemW = width / count;
-        final pillLeft = itemW * widget.currentIndex + 6;
-        final pillW = itemW - 12;
-        final tint = _pillTintForIndex(widget.currentIndex);
-        return Stack(
-          children: [
-            // Ripple under the pill
-            Positioned(
-              left: pillLeft + pillW / 2 - 28,
-              top: 6 + 28 - 28,
-              width: 56,
-              height: 56,
-              child: AnimatedBuilder(
-                animation: _controller,
-                builder: (context, _) {
-                  final scale = 0.6 + 0.8 * _controller.value;
-                  final opacity = (0.30 * (1.0 - _controller.value)).clamp(
-                    0.0,
-                    0.30,
-                  );
-                  return Opacity(
-                    opacity: opacity,
-                    child: Transform.scale(
-                      scale: scale,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: tint.withValues(alpha: 0.22),
-                          boxShadow: [
-                            BoxShadow(
-                              color: tint.withValues(alpha: 0.22),
-                              blurRadius: 18,
-                              spreadRadius: 6,
-                            ),
-                          ],
-                        ),
+    const double itemW =
+        60.0; // tighter fixed width per tab for icons-only layout
+    final double contentW = (count * itemW).toDouble();
+    final double pillLeft = (widget.currentIndex * itemW) + 6.0;
+    final double pillW = itemW - 12.0;
+    final tint = _pillTintForIndex(widget.currentIndex);
+
+    final Widget contentStack = SizedBox(
+      width: contentW,
+      height: 68,
+      child: Stack(
+        children: [
+          // Ripple under the pill
+          Positioned(
+            left: pillLeft + pillW / 2 - 28,
+            top: 6 + 28 - 28,
+            width: 56,
+            height: 56,
+            child: AnimatedBuilder(
+              animation: _controller,
+              builder: (context, _) {
+                final scale = 0.6 + 0.8 * _controller.value;
+                final opacity = (0.30 * (1.0 - _controller.value)).clamp(
+                  0.0,
+                  0.30,
+                );
+                return Opacity(
+                  opacity: opacity,
+                  child: Transform.scale(
+                    scale: scale,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: tint.withValues(alpha: 0.22),
+                        boxShadow: [
+                          BoxShadow(
+                            color: tint.withValues(alpha: 0.22),
+                            blurRadius: 18,
+                            spreadRadius: 6,
+                          ),
+                        ],
                       ),
                     ),
-                  );
-                },
-              ),
+                  ),
+                );
+              },
             ),
-            // Moving pill
-            AnimatedPositioned(
-              duration: const Duration(milliseconds: 200),
-              curve: Curves.easeOutCubic,
-              left: pillLeft,
-              top: 6,
-              width: pillW,
-              height: 56,
-              child: ScaleTransition(
-                scale: _bounce,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        tint.withValues(alpha: 0.38),
-                        Colors.white.withValues(alpha: 0.22),
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: tint.withValues(alpha: 0.28),
-                        blurRadius: 12,
-                        offset: const Offset(0, 6),
-                      ),
+          ),
+          // Moving pill
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOutCubic,
+            left: pillLeft,
+            top: 6,
+            width: pillW,
+            height: 56,
+            child: ScaleTransition(
+              scale: _bounce,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      tint.withValues(alpha: 0.38),
+                      Colors.white.withValues(alpha: 0.22),
                     ],
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.35),
-                      width: 0.8,
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: tint.withValues(alpha: 0.28),
+                      blurRadius: 12,
+                      offset: const Offset(0, 6),
                     ),
+                  ],
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.35),
+                    width: 0.8,
                   ),
                 ),
               ),
             ),
-            Row(
-              children: [
-                for (int i = 0; i < count; i++)
-                  Expanded(
-                    child: _TabItem(
-                      selected: i == widget.currentIndex,
-                      destination: widget.destinations[i],
-                      onTap: () => widget.onTap(i),
-                      controller: _controller,
-                      textStyle: widget.textStyle,
-                      activeColor: _pillTintForIndex(i),
+          ),
+          Row(
+            children: [
+              for (int i = 0; i < count; i++)
+                SizedBox(
+                  width: itemW,
+                  child: _TabItem(
+                    selected: i == widget.currentIndex,
+                    destination: widget.destinations[i],
+                    onTap: () => widget.onTap(i),
+                    controller: _controller,
+                    textStyle: widget.textStyle,
+                    activeColor: _pillTintForIndex(i),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final bool overflow = contentW > constraints.maxWidth + 0.5;
+        final Color glass = Colors.white.withValues(alpha: 0.26);
+        final Widget scroller = SingleChildScrollView(
+          controller: _scroll,
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          child: contentStack,
+        );
+
+        return SizedBox(
+          height: 68,
+          child: Stack(
+            children: [
+              scroller,
+              // Left gradient fade
+              if (overflow && !_atStart)
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: 28,
+                  child: IgnorePointer(
+                    ignoring: true,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
+                          colors: [
+                            glass.withValues(alpha: 0.9),
+                            glass.withValues(alpha: 0.0),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
-              ],
-            ),
-          ],
+                ),
+              // Right gradient fade
+              if (overflow && !_atEnd)
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                  width: 28,
+                  child: IgnorePointer(
+                    ignoring: true,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
+                          colors: [
+                            glass.withValues(alpha: 0.0),
+                            glass.withValues(alpha: 0.9),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              // Left chevron
+              if (overflow && !_atStart)
+                Positioned(
+                  left: 2,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: _ChevronButton(
+                      direction: AxisDirection.left,
+                      onTap: () {
+                        final viewport = constraints.maxWidth;
+                        final target = (_scroll.offset - viewport * 0.6).clamp(
+                          0.0,
+                          _scroll.position.maxScrollExtent,
+                        );
+                        _scroll.animateTo(
+                          target,
+                          duration: const Duration(milliseconds: 240),
+                          curve: Curves.easeOutCubic,
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              // Right chevron
+              if (overflow && !_atEnd)
+                Positioned(
+                  right: 2,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: _ChevronButton(
+                      direction: AxisDirection.right,
+                      onTap: () {
+                        final viewport = constraints.maxWidth;
+                        final target = (_scroll.offset + viewport * 0.6).clamp(
+                          0.0,
+                          _scroll.position.maxScrollExtent,
+                        );
+                        _scroll.animateTo(
+                          target,
+                          duration: const Duration(milliseconds: 240),
+                          curve: Curves.easeOutCubic,
+                        );
+                      },
+                    ),
+                  ),
+                ),
+            ],
+          ),
         );
       },
     );
+  }
+
+  void _ensureSelectedVisible({bool animate = true}) {
+    final count = widget.destinations.length;
+    if (count == 0 || !_scroll.hasClients) return;
+    const double itemW = 60.0;
+    final double viewportW = _scroll.position.viewportDimension;
+    final double contentW = count * itemW;
+    final double targetCenter = (widget.currentIndex * itemW) + (itemW / 2);
+    double targetOffset = targetCenter - (viewportW / 2);
+    if (targetOffset < 0) targetOffset = 0;
+    final double maxOffset = (contentW - viewportW).clamp(0.0, double.infinity);
+    if (targetOffset > maxOffset) targetOffset = maxOffset;
+    if (animate) {
+      _scroll.animateTo(
+        targetOffset,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+      );
+    } else {
+      _scroll.jumpTo(targetOffset);
+    }
+  }
+
+  void _onScrollChanged() {
+    if (!_scroll.hasClients) return;
+    final pos = _scroll.position;
+    final atStart = pos.pixels <= pos.minScrollExtent + 0.5;
+    final atEnd = pos.pixels >= pos.maxScrollExtent - 0.5;
+    if (atStart != _atStart || atEnd != _atEnd) {
+      setState(() {
+        _atStart = atStart;
+        _atEnd = atEnd;
+      });
+    }
   }
 
   Color _pillTintForIndex(int index) {
@@ -4423,6 +4590,48 @@ class _PillTabsState extends State<_PillTabs>
       return const Color(0xFF7C8DB5); // indigo/grey
     }
     return Colors.blueAccent;
+  }
+}
+
+class _ChevronButton extends StatelessWidget {
+  final AxisDirection direction;
+  final VoidCallback onTap;
+  const _ChevronButton({required this.direction, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final isLeft = direction == AxisDirection.left;
+    final icon = isLeft ? Icons.chevron_left : Icons.chevron_right;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: Ink(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.white.withValues(alpha: 0.42),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.12),
+                blurRadius: 8,
+              ),
+            ],
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.5),
+              width: 0.6,
+            ),
+          ),
+          width: 28,
+          height: 28,
+          child: Icon(
+            icon,
+            size: 20,
+            color: Colors.black.withValues(alpha: 0.7),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -4450,8 +4659,7 @@ class _TabItem extends StatelessWidget {
     final inactive = baseColor.withValues(alpha: 0.6);
     return LayoutBuilder(
       builder: (context, constraints) {
-        final showLabel =
-            selected && constraints.maxWidth >= 88; // hide on tight
+        // icons-only layout: no label rendering
         return Material(
           color: Colors.transparent,
           child: InkWell(
@@ -4464,12 +4672,9 @@ class _TabItem extends StatelessWidget {
             highlightColor: Colors.transparent,
             borderRadius: BorderRadius.circular(14),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 56, minWidth: 72),
+              constraints: const BoxConstraints(minHeight: 56, minWidth: 52),
               child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
-                  vertical: 10,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
                 child: AnimatedDefaultTextStyle(
                   duration: const Duration(milliseconds: 250),
                   style: (textStyle ?? const TextStyle()).copyWith(
@@ -4495,16 +4700,7 @@ class _TabItem extends StatelessWidget {
                           ),
                         ),
                       ),
-                      if (showLabel) ...[
-                        const SizedBox(width: 6),
-                        Flexible(
-                          child: Text(
-                            destination.label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
+                      // no labels in icons-only layout
                     ],
                   ),
                 ),
