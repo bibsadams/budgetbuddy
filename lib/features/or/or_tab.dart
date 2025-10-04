@@ -31,7 +31,7 @@ class OrTab extends StatefulWidget {
 
 class _OrTabState extends State<OrTab> {
   // Match Expenses tab controls/state
-  String _sort = 'Date (newest)';
+  String _sort = 'Validity (soonest)';
   bool _searchExpanded = false;
   final TextEditingController _searchCtrl = TextEditingController();
   String _query = '';
@@ -76,6 +76,27 @@ class _OrTabState extends State<OrTab> {
   }
 
   List<Map<String, dynamic>> _sorted(List<Map<String, dynamic>> list) {
+    int cmpValid(String a, String b) {
+      DateTime? pa(String s) => _parseDateFlexible(s);
+      final da = pa(a);
+      final db = pa(b);
+      final now = DateTime.now();
+      // Grouping: expired first, then upcoming, then no-validity
+      int group(DateTime? d) {
+        if (d == null) return 2; // no validity -> last
+        if (now.isAfter(d)) return 0; // expired -> first
+        return 1; // upcoming -> middle
+      }
+
+      final ga = group(da);
+      final gb = group(db);
+      if (ga != gb) return ga.compareTo(gb);
+      if (da == null && db == null) return 0;
+      if (da == null) return 1; // a after b
+      if (db == null) return -1;
+      return da.compareTo(db); // ascending: soonest first
+    }
+
     int cmpDate(String a, String b) {
       final da = _parseDateFlexible(a);
       final db = _parseDateFlexible(b);
@@ -87,6 +108,14 @@ class _OrTabState extends State<OrTab> {
 
     final copy = List<Map<String, dynamic>>.from(list);
     switch (_sort) {
+      case 'Validity (soonest)':
+        copy.sort(
+          (a, b) => cmpValid(
+            (a['ValidUntil'] ?? '') as String,
+            (b['ValidUntil'] ?? '') as String,
+          ),
+        );
+        break;
       case 'Amount (high → low)':
         copy.sort(
           (a, b) => _toAmount(b['Amount']).compareTo(_toAmount(a['Amount'])),
@@ -104,10 +133,18 @@ class _OrTabState extends State<OrTab> {
         );
         break;
       case 'Date (newest)':
-      default:
         copy.sort(
           (a, b) =>
               cmpDate((b['Date'] ?? '') as String, (a['Date'] ?? '') as String),
+        );
+        break;
+      default:
+        // Fallback to Validity if unknown
+        copy.sort(
+          (a, b) => cmpValid(
+            (a['ValidUntil'] ?? '') as String,
+            (b['ValidUntil'] ?? '') as String,
+          ),
         );
     }
     return copy;
@@ -265,6 +302,10 @@ class _OrTabState extends State<OrTab> {
                             onSelected: (v) => setState(() => _sort = v),
                             itemBuilder: (ctx) => const [
                               PopupMenuItem(
+                                value: 'Validity (soonest)',
+                                child: Text('Validity (soonest)'),
+                              ),
+                              PopupMenuItem(
                                 value: 'Date (newest)',
                                 child: Text('Date (newest)'),
                               ),
@@ -338,10 +379,29 @@ class _OrTabState extends State<OrTab> {
       Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.08),
       Colors.white,
     );
+    // Compute status based on ValidUntil date
+    final String validUntilRaw = (row['ValidUntil'] ?? '').toString();
+    final DateTime now = DateTime.now();
+    final DateTime? validUntil = _parseDateFlexible(validUntilRaw);
+    bool isExpired = false;
+    late final String statusText;
+    late final Color statusColor;
+    if (validUntil != null) {
+      isExpired = now.isAfter(validUntil);
+      statusText = isExpired ? 'Expired' : 'Active';
+      statusColor = isExpired ? Colors.red : Colors.green;
+    } else {
+      // If no due date set, treat as Active by default
+      statusText = 'Active';
+      statusColor = Colors.green;
+    }
+    final Color cardBg = isExpired
+        ? Theme.of(context).colorScheme.errorContainer
+        : pillowColor;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 14),
       child: PressableNeumorphic(
-        backgroundColor: pillowColor,
+        backgroundColor: cardBg,
         borderRadius: 18,
         padding: const EdgeInsets.all(16),
         onTap: () async {
@@ -440,13 +500,65 @@ class _OrTabState extends State<OrTab> {
                     ],
                   ),
                   const SizedBox(height: 2),
-                  Text(
-                    (row['Date'] ?? '').toString(),
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodySmall!.copyWith(color: Colors.grey),
-                    overflow: TextOverflow.ellipsis,
-                    maxLines: 1,
+                  // Days-left until ValidUntil
+                  Builder(
+                    builder: (_) {
+                      final validStr = (row['ValidUntil'] ?? '').toString();
+                      final dt = _parseDateFlexible(validStr);
+                      String daysInfo = '';
+                      if (dt != null) {
+                        final today = DateTime.now();
+                        final d0 = DateTime(today.year, today.month, today.day);
+                        final v0 = DateTime(dt.year, dt.month, dt.day);
+                        final diff = v0.difference(d0).inDays;
+                        if (diff > 1) {
+                          daysInfo = 'Expires in $diff days';
+                        } else if (diff == 1) {
+                          daysInfo = 'Expires tomorrow';
+                        } else if (diff == 0) {
+                          daysInfo = 'Expires today';
+                        } else {
+                          daysInfo =
+                              'Expired by ${-diff} day${diff == -1 ? '' : 's'}';
+                        }
+                      }
+                      return daysInfo.isEmpty
+                          ? const SizedBox.shrink()
+                          : Padding(
+                              padding: const EdgeInsets.only(bottom: 2),
+                              child: Text(
+                                daysInfo,
+                                style: TextStyle(
+                                  color: daysInfo.startsWith('Expired')
+                                      ? Colors.red
+                                      : (daysInfo == 'Expires today'
+                                            ? Colors.orange
+                                            : Colors.grey[700]),
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                                maxLines: 1,
+                              ),
+                            );
+                    },
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          (row['Date'] ?? '').toString(),
+                          style: Theme.of(
+                            context,
+                          ).textTheme.bodySmall!.copyWith(color: Colors.grey),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      _StatusPill(text: statusText, color: statusColor),
+                    ],
                   ),
                 ],
               ),
@@ -458,6 +570,34 @@ class _OrTabState extends State<OrTab> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _StatusPill extends StatelessWidget {
+  final String text;
+  final Color color;
+  const _StatusPill({required this.text, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = color.withValues(alpha: 0.12);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.35), width: 1),
+      ),
+      child: Text(
+        text,
+        style:
+            Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: color,
+              fontWeight: FontWeight.w600,
+            ) ??
+            TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
       ),
     );
   }

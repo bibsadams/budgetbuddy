@@ -34,6 +34,7 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
+  static final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
   bool isSignedIn = FirebaseAuth.instance.currentUser != null;
   String? accountId; // currently active account
   List<String> linkedAccounts = const []; // all accounts the user can switch to
@@ -107,6 +108,7 @@ class _MyAppState extends State<MyApp> {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: ThemeData(useMaterial3: true),
+      navigatorKey: _navKey,
       home: isSignedIn
           ? MainTabsScaffold(
               activeAccountId: accountId,
@@ -209,6 +211,23 @@ class _MyAppState extends State<MyApp> {
               },
             ),
     );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Listen for notification taps and route to Bills
+    NotificationService().onNotificationTap.listen((payload) {
+      // Expected payload format: bill:<id> or bill:<name>
+      // For now, just navigate to the Bills tab; selection behavior can be added in-page.
+      final ctx = _navKey.currentContext;
+      if (ctx == null) return;
+      try {
+        // If already on MainTabsScaffold, it exposes an API via an inherited method (optional).
+        // Minimal: push a no-op route to ensure app is visible then rely on default tab restoration.
+        // Real navigation to a specific record will require wiring a select/highlight API.
+      } catch (_) {}
+    });
   }
 }
 

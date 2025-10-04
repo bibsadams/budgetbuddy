@@ -26,6 +26,7 @@ import 'manage_accounts_page.dart';
 import 'join_requests_page.dart';
 import 'widgets/app_gradient_background.dart';
 import 'features/categories/categories_manager_page.dart';
+import 'services/notification_service.dart';
 
 class MainTabsPage extends StatefulWidget {
   final String accountId;
@@ -91,6 +92,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
   final Set<String> _accMemberIds = {};
   final Set<String> _accOwnerIds = {};
   String? _uid;
+  StreamSubscription<String>? _notifTapSub;
   void _scheduleTapAutosave() {
     _tapAutosave?.cancel();
     _tapAutosave = Timer(const Duration(milliseconds: 500), () {
@@ -105,6 +107,15 @@ class _MainTabsPageState extends State<MainTabsPage> {
     box = Hive.box('budgetBox');
     _initShared();
     _pageController = PageController(initialPage: _index);
+    _notifTapSub = NotificationService().onNotificationTap.listen(
+      _handleNotificationTap,
+    );
+    // Also handle the case when app is launched from a terminated state
+    // by consuming any pending initial payload after a short delay.
+    Future.delayed(const Duration(milliseconds: 300), () {
+      final p = NotificationService().consumeInitialLaunchPayload();
+      if (p != null && p.isNotEmpty) _handleNotificationTap(p);
+    });
   }
 
   // Generate a stable-ish uid for a receipt (no external dependency; 26-28 chars)
@@ -1614,7 +1625,91 @@ class _MainTabsPageState extends State<MainTabsPage> {
     _settingsScroll.dispose();
     _accMemberSub?.cancel();
     _accOwnerSub?.cancel();
+    _notifTapSub?.cancel();
     super.dispose();
+  }
+
+  void _handleNotificationTap(String payload) {
+    if (!payload.startsWith('bill:')) return;
+    final token = payload.substring(5);
+    // Navigate to Bills tab (index 3 in base pages)
+    const billsPageIndex = 3;
+    _pageController.animateToPage(
+      billsPageIndex,
+      duration: const Duration(milliseconds: 360),
+      curve: Curves.easeOutCubic,
+    );
+    // After the page is visible, try to scroll to the bill entry
+    Future.delayed(const Duration(milliseconds: 420), () {
+      final rows = tableData['Bills'] ?? const <Map<String, dynamic>>[];
+      if (rows.isEmpty) return;
+      // Compute the same sorted order as BillsTab
+      int group(Map<String, dynamic> r) {
+        final enabled = r['Enabled'] == true;
+        final repeatStr = (r['Repeat'] ?? 'None').toString();
+        final isOneTimePaid = !enabled && repeatStr == 'None';
+        final dueStr = (r['Due Date'] ?? '') as String;
+        final hasDue = dueStr.isNotEmpty && DateTime.tryParse(dueStr) != null;
+        if (isOneTimePaid) return 2;
+        if (!hasDue) return 1;
+        return 0;
+      }
+
+      int diffDays(Map<String, dynamic> r) {
+        final dueStr = (r['Due Date'] ?? '') as String;
+        final dt = DateTime.tryParse(dueStr);
+        if (dt == null) return 1 << 20;
+        final today = DateTime.now();
+        final d0 = DateTime(today.year, today.month, today.day);
+        final due0 = DateTime(dt.year, dt.month, dt.day);
+        return due0.difference(d0).inDays;
+      }
+
+      final sorted = List<int>.generate(rows.length, (i) => i);
+      sorted.sort((a, b) {
+        final ra = rows[a];
+        final rb = rows[b];
+        final ga = group(ra);
+        final gb = group(rb);
+        if (ga != gb) return ga.compareTo(gb);
+        if (ga == 0) {
+          final da = diffDays(ra);
+          final db = diffDays(rb);
+          if (da != db) return da.compareTo(db);
+        }
+        final na = (ra['Name'] ?? '').toString().toLowerCase();
+        final nb = (rb['Name'] ?? '').toString().toLowerCase();
+        return na.compareTo(nb);
+      });
+      // Find original index by id/name, then map to sorted position
+      int origIndex = -1;
+      if (token.isNotEmpty) {
+        origIndex = rows.indexWhere(
+          (r) => (r['id']?.toString() ?? '') == token,
+        );
+        if (origIndex < 0) {
+          final low = token.toLowerCase();
+          origIndex = rows.indexWhere(
+            (r) => (r['Name']?.toString().toLowerCase() ?? '') == low,
+          );
+        }
+      }
+      if (origIndex >= 0) {
+        final targetIndex = sorted.indexOf(origIndex);
+        if (targetIndex >= 0 && _billsScroll.hasClients) {
+          const estimatedExtent = 84.0; // approximate row height
+          final offset = (targetIndex * estimatedExtent).clamp(
+            0.0,
+            double.infinity,
+          );
+          _billsScroll.animateTo(
+            offset,
+            duration: const Duration(milliseconds: 420),
+            curve: Curves.easeOutCubic,
+          );
+        }
+      }
+    });
   }
 
   void _showCloudWarning(Object e) {

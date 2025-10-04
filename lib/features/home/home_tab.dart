@@ -95,25 +95,52 @@ class _HomeTabState extends State<HomeTab> {
     final bills = (widget.tableData['Bills'] ?? []) as List? ?? [];
     DateTime? parseDateFlexible(String v) {
       if (v.isEmpty) return null;
+      // Prefer strict yyyy-MM-dd used by Bills
+      try {
+        return DateFormat('yyyy-MM-dd').parseStrict(v);
+      } catch (_) {}
+      // Fallbacks
       final iso = DateTime.tryParse(v);
       if (iso != null) return iso;
-      try {
-        return DateFormat('MM/dd/yyyy').parseStrict(v);
-      } catch (_) {}
-      try {
-        return DateFormat('dd/MM/yyyy').parseStrict(v);
-      } catch (_) {}
-      try {
-        return DateFormat('M/d/yyyy').parseStrict(v);
-      } catch (_) {}
+      for (final fmt in const ['MM/dd/yyyy', 'dd/MM/yyyy', 'M/d/yyyy']) {
+        try {
+          return DateFormat(fmt).parseStrict(v);
+        } catch (_) {}
+      }
       return null;
     }
 
+    DateTime _nextOccurrence(DateTime base, String repeat, DateTime start) {
+      // Return the first occurrence on or after 'start'
+      DateTime d = DateTime(base.year, base.month, base.day);
+      if (repeat == 'Weekly' || repeat.toLowerCase() == 'weekly') {
+        while (d.isBefore(start)) {
+          d = d.add(const Duration(days: 7));
+        }
+        return d;
+      } else if (repeat == 'Monthly' || repeat.toLowerCase() == 'monthly') {
+        while (d.isBefore(start)) {
+          d = DateTime(d.year, d.month + 1, d.day);
+        }
+        return d;
+      } else if (repeat == 'Yearly' || repeat.toLowerCase() == 'yearly') {
+        while (d.isBefore(start)) {
+          d = DateTime(d.year + 1, d.month, d.day);
+        }
+        return d;
+      }
+      // None
+      return d;
+    }
+
     final dueSoon = bills.where((row) {
-      final ds = (row['Due Date'] ?? row['Date'] ?? '').toString();
+      // Use the canonical Bills field; ignore legacy 'Date' to avoid stale values
+      final ds = (row['Due Date'] ?? '').toString();
       final dt = parseDateFlexible(ds);
       if (dt == null) return false;
-      final d0 = DateTime(dt.year, dt.month, dt.day);
+      final repeat = (row['Repeat'] ?? 'None').toString();
+      final next = _nextOccurrence(dt, repeat, today);
+      final d0 = DateTime(next.year, next.month, next.day);
       final diff = d0.difference(today).inDays;
       return diff >= 0 && diff <= 7;
     }).toList();

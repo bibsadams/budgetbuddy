@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest_all.dart' as tzdata;
@@ -12,6 +13,10 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
   bool _initialized = false;
+  final StreamController<String> _tapController =
+      StreamController<String>.broadcast();
+  Stream<String> get onNotificationTap => _tapController.stream;
+  String? _initialLaunchPayload;
 
   Future<void> init() async {
     if (_initialized) return;
@@ -23,7 +28,16 @@ class NotificationService {
       android: androidInit,
       iOS: iosInit,
     );
-    await _plugin.initialize(initSettings);
+    await _plugin.initialize(
+      initSettings,
+      onDidReceiveNotificationResponse: (NotificationResponse r) {
+        final p = r.payload;
+        if (p != null && p.isNotEmpty) {
+          _tapController.add(p);
+        }
+      },
+      onDidReceiveBackgroundNotificationResponse: notificationTapBackground,
+    );
     // Request permissions where required
     final android = _plugin
         .resolvePlatformSpecificImplementation<
@@ -36,6 +50,16 @@ class NotificationService {
         >();
     await ios?.requestPermissions(alert: true, badge: true, sound: true);
     _initialized = true;
+
+    // If the app was launched via a notification tap, emit its payload
+    final details = await _plugin.getNotificationAppLaunchDetails();
+    final resp = details?.notificationResponse;
+    final p = resp?.payload;
+    if (p != null && p.isNotEmpty) {
+      _initialLaunchPayload = p;
+      // Defer to ensure listeners are attached
+      Future.microtask(() => _tapController.add(p));
+    }
   }
 
   Future<void> cancel(int id) async {
@@ -69,6 +93,7 @@ class NotificationService {
     required String body,
     required DateTime firstDateTime,
     RepeatIntervalMode repeat = RepeatIntervalMode.none,
+    String? payload,
   }) async {
     await init();
 
@@ -101,6 +126,7 @@ class NotificationService {
             uiLocalNotificationDateInterpretation:
                 UILocalNotificationDateInterpretation.absoluteTime,
             matchDateTimeComponents: null,
+            payload: payload,
           );
           break;
         case RepeatIntervalMode.weekly:
@@ -114,6 +140,7 @@ class NotificationService {
             uiLocalNotificationDateInterpretation:
                 UILocalNotificationDateInterpretation.absoluteTime,
             matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+            payload: payload,
           );
           break;
         case RepeatIntervalMode.monthly:
@@ -127,6 +154,7 @@ class NotificationService {
             uiLocalNotificationDateInterpretation:
                 UILocalNotificationDateInterpretation.absoluteTime,
             matchDateTimeComponents: DateTimeComponents.dayOfMonthAndTime,
+            payload: payload,
           );
           break;
         case RepeatIntervalMode.yearly:
@@ -140,6 +168,7 @@ class NotificationService {
             uiLocalNotificationDateInterpretation:
                 UILocalNotificationDateInterpretation.absoluteTime,
             matchDateTimeComponents: DateTimeComponents.dateAndTime,
+            payload: payload,
           );
           break;
       }
@@ -212,4 +241,17 @@ class NotificationService {
     }
     return scheduled;
   }
+
+  /// Returns and clears the payload if the app was launched by tapping
+  /// a notification while it was terminated.
+  String? consumeInitialLaunchPayload() {
+    final p = _initialLaunchPayload;
+    _initialLaunchPayload = null;
+    return p;
+  }
+}
+
+@pragma('vm:entry-point')
+void notificationTapBackground(NotificationResponse response) {
+  // No-op: the response will be delivered again in onDidReceiveNotificationResponse
 }
