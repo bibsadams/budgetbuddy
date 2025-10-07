@@ -322,10 +322,7 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
           );
         }
       } catch (e) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to save: $e')));
+        // Suppress save error SnackBar per requirements; avoid blocking UX
       }
     }
   }
@@ -484,10 +481,7 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
             try {
               await _repo!.deleteCustomTabRecord(widget.tabId, id);
             } catch (e) {
-              if (!mounted) return;
-              ScaffoldMessenger.of(
-                context,
-              ).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
+              // Suppress delete error SnackBar per requirements
             }
           }
           if (mounted) {
@@ -515,10 +509,7 @@ class _CustomTabPageHostState extends State<CustomTabPageHost> {
             });
           }
         } catch (e) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Failed to update: $e')));
+          // Suppress update error SnackBar per requirements
         }
       }
     }

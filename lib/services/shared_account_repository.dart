@@ -103,7 +103,7 @@ class SharedAccountRepository {
     return snap.data();
   }
 
-  // Ensure account exists; owners are auto-added. Non-owners must be approved by owner.
+  // Ensure account exists and add current user as a member (no restrictions)
   Future<void> ensureMembership({String? displayName, String? email}) async {
     await _db.runTransaction((tx) async {
       // READ PHASE (all reads must occur before any writes in a transaction)
@@ -114,11 +114,9 @@ class SharedAccountRepository {
 
       // Capture existing members and props if account exists
       List<String> members = [];
-      String createdBy = '';
       if (accountSnap.exists) {
         final data = accountSnap.data() ?? {};
         members = List<String>.from(data['members'] ?? []);
-        createdBy = (data['createdBy'] as String?) ?? '';
       }
 
       final bool needsJoin = !createAccount && !members.contains(uid);
@@ -130,35 +128,14 @@ class SharedAccountRepository {
           'createdBy': uid,
           if (email != null) 'createdByEmail': email,
           'members': [uid],
-          'isJoint': false, // default to non-joint until owner enables
+          // isJoint flag not enforced for membership; left as-is or default false
+          'isJoint': false,
         });
         // creator implicitly joined
       } else if (needsJoin) {
-        // If you're the owner (createdBy == uid), allow seamless access on new device.
-        if (createdBy == uid) {
-          members.add(uid);
-          tx.update(_accountDoc, {'members': members});
-        } else {
-          // For non-owners, only allow join if account is joint AND an approval doc exists.
-          final data = accountSnap.data() ?? {};
-          final isJoint = (data['isJoint'] as bool?) ?? false;
-          if (!isJoint) {
-            // Not a joint account: this Gmail should create/own its own account instead.
-            throw StateError(
-              'This account is single-owner. Use your own account.',
-            );
-          }
-          // Check for an approved join request to allow automatic membership.
-          final reqSnap = await tx.get(_joinRequestsCol.doc(uid));
-          final status = (reqSnap.data()?['status'] as String?) ?? 'pending';
-          if (status == 'approved') {
-            members.add(uid);
-            tx.update(_accountDoc, {'members': members});
-            // Also upsert member doc below after transaction
-          } else {
-            throw StateError('Awaiting owner approval to join this account.');
-          }
-        }
+        // Always allow adding authenticated user to members
+        members.add(uid);
+        tx.update(_accountDoc, {'members': members});
       }
     });
 

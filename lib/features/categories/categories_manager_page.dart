@@ -287,10 +287,7 @@ class _ExpensesCategoriesListState extends State<_ExpensesCategoriesList> {
                       newName: newName,
                     );
                   } catch (e) {
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Cloud rename failed: $e')),
-                    );
+                    // Suppress cloud error SnackBar per requirements
                   }
                   if (!context.mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -470,12 +467,7 @@ class _ExpensesCategoriesListState extends State<_ExpensesCategoriesList> {
                               newName: newName,
                             );
                           } catch (e) {
-                            if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Cloud rename failed: $e'),
-                              ),
-                            );
+                            // Suppress cloud error SnackBar per requirements
                           }
                           if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -700,10 +692,7 @@ class _SavingsCategoriesListState extends State<_SavingsCategoriesList> {
                       newName: newName,
                     );
                   } catch (e) {
-                    if (!context.mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Cloud rename failed: $e')),
-                    );
+                    // Suppress cloud error SnackBar per requirements
                   }
                   if (!context.mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -889,12 +878,7 @@ class _SavingsCategoriesListState extends State<_SavingsCategoriesList> {
                               newName: newName,
                             );
                           } catch (e) {
-                            if (!context.mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Cloud rename failed: $e'),
-                              ),
-                            );
+                            // Suppress cloud error SnackBar per requirements
                           }
                           if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(

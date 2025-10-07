@@ -1,0 +1,136 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() { return request.auth != null; }
+    function accountDoc(accountId) { return get(/databases/$(database)/documents/accounts/$(accountId)); }
+    function isOwner(accountId) { return isSignedIn() && accountDoc(accountId).data.createdBy == request.auth.uid; }
+    function isMember(accountId) {
+      return isSignedIn() && (
+        (
+          accountDoc(accountId).data.members is list &&
+          request.auth.uid in accountDoc(accountId).data.members
+        ) || (
+          get(/databases/$(database)/documents/accounts/$(accountId)/members/$(request.auth.uid)).exists()
+        )
+      );
+    }
+    function canAccess(accountId) { return isOwner(accountId) || isMember(accountId); }
+
+    // Validators
+    function validMoney(d) { return d.amount is number && d.amount >= 0 && d.amount < 100000000; }
+    function validDate(d) { return d.date is timestamp; }
+    // Bills validators
+    function billHasName(d) { return d.name is string && d.name.size() > 0 && d.name.size() <= 80; }
+    function billValidDueDate(d) { return d.dueDate is timestamp; }
+    function billValidTime(d) { return !(d.time is string) || (d.time.size() == 5 && d.time.matches('^[0-2][0-9]:[0-5][0-9]$')); }
+    function billValidRepeat(d) { return !(d.repeat is string) || d.repeat in ['None','Daily','Weekly','Monthly','Yearly']; }
+    function hasCategory(d) { return d.category is string && d.category.size() > 0 && d.category.size() <= 60; }
+    function hasSubcategory(d) { return !(d.subcategory is string) || d.subcategory.size() <= 80; }
+    function hasNote(d) { return !(d.note is string) || d.note.size() <= 300; }
+    function validReceipt(d) { return !(d.receiptUid is string) || d.receiptUid.size() <= 80; }
+
+    match /accounts/{accountId} {
+      // Allow existence checks by signed-in users (for initiating join)
+      allow get: if isSignedIn();
+      // Disallow listing all accounts
+      allow list: if false;
+      // Account creates: owner must be the authenticated user
+      allow create: if isSignedIn() && request.resource.data.createdBy == request.auth.uid;
+      // Owner can update/delete, with optional constraints on categories
+      allow update, delete: if isOwner(accountId)
+        && ( !(request.resource.data.categories is list) || request.resource.data.categories.size() <= 50 )
+        && ( !(request.resource.data.categories is list) || request.resource.data.categories.every(c, c is string && c.size() > 0 && c.size() <= 40) );
+
+      // Members profile docs
+      match /members/{uid} {
+        allow read: if canAccess(accountId) || (isSignedIn() && uid == request.auth.uid);
+        allow create, update: if isSignedIn() && uid == request.auth.uid;
+        allow delete: if false; // Prevent arbitrary deletion; owner flow can manage membership differently
+      }
+      match /joinRequests/{uid} {
+        allow create: if isSignedIn() && uid == request.auth.uid;
+        allow get: if isSignedIn() && uid == request.auth.uid;
+        allow list, update, delete: if isOwner(accountId);
+      }
+
+      // Expenses collection
+      match /expenses/{docId} {
+        allow read: if canAccess(accountId);
+        allow create: if canAccess(accountId) && validMoney(request.resource.data) && validDate(request.resource.data) && hasCategory(request.resource.data) && hasSubcategory(request.resource.data) && hasNote(request.resource.data) && validReceipt(request.resource.data);
+        allow update: if canAccess(accountId) && validMoney(request.resource.data) && validDate(request.resource.data);
+        allow delete: if canAccess(accountId);
+      }
+
+      // Savings collection
+      match /savings/{docId} {
+        allow read: if canAccess(accountId);
+        allow create: if canAccess(accountId) && validMoney(request.resource.data) && validDate(request.resource.data) && hasCategory(request.resource.data) && hasNote(request.resource.data) && validReceipt(request.resource.data);
+        allow update: if canAccess(accountId) && validMoney(request.resource.data) && validDate(request.resource.data);
+        allow delete: if canAccess(accountId);
+      }
+
+      // OR collection (mirrors savings)
+      match /or/{docId} {
+        allow read: if canAccess(accountId);
+        allow create: if canAccess(accountId) && validMoney(request.resource.data) && validDate(request.resource.data) && hasCategory(request.resource.data) && hasNote(request.resource.data) && validReceipt(request.resource.data);
+        allow update: if canAccess(accountId) && validMoney(request.resource.data) && validDate(request.resource.data);
+        allow delete: if canAccess(accountId);
+      }
+
+      // Bills collection
+      match /bills/{docId} {
+        allow read: if canAccess(accountId);
+        allow create: if canAccess(accountId) && billHasName(request.resource.data) && validMoney(request.resource.data) && billValidDueDate(request.resource.data) && billValidTime(request.resource.data) && billValidRepeat(request.resource.data);
+        allow update: if canAccess(accountId) && billHasName(request.resource.data) && validMoney(request.resource.data);
+        allow delete: if canAccess(accountId);
+      }
+
+      // Meta (limits/goals)
+      match /meta/{docId} {
+        allow read, create, update: if canAccess(accountId);
+        allow delete: if false;
+      }
+
+      // Custom Tabs and their records
+      match /customTabs/{tabId} {
+        allow read: if canAccess(accountId);
+        // Enforce max 10 custom tabs using counters doc in /accounts/{accountId}/meta/counters (customTabsCount field)
+        allow create: if canAccess(accountId)
+          && request.resource.data.title is string
+          && request.resource.data.title.size() > 0
+          && request.resource.data.title.size() <= 60
+          && request.resource.data.order is number
+          && (
+            // If counters doc missing treat as 0
+            (
+              let counters = get(/databases/$(database)/documents/accounts/$(accountId)/meta/counters);
+              !(counters.exists()) || ((counters.data.customTabsCount as int? ?? 0) < 10)
+            )
+          );
+        allow update, delete: if canAccess(accountId);
+
+        match /records/{recId} {
+          allow read: if canAccess(accountId);
+          allow create: if canAccess(accountId)
+            && validMoney(request.resource.data) && validDate(request.resource.data) && hasCategory(request.resource.data) && hasNote(request.resource.data) && validReceipt(request.resource.data);
+          allow update: if canAccess(accountId)
+            && validMoney(request.resource.data) && validDate(request.resource.data);
+          allow delete: if canAccess(accountId);
+        }
+      }
+    }
+
+    // Global joinRequests fallback (legacy) - allow create only by the requesting user; no reads
+    match /joinRequests/{docId} {
+      allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+      allow read, update, delete: if false;
+    }
+
+    // Outbound email trigger collection (extensions / functions), only allow create
+    match /mail/{document=**} {
+      allow create: if isSignedIn();
+      allow read, update, delete: if false;
+    }
+  }
+}

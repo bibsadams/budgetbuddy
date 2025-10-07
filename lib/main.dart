@@ -1,4 +1,5 @@
 // Clean single-definition main.dart to resolve duplicate classes
+import 'dart:async';
 import 'dart:math';
 import 'dart:ui' show ImageFilter;
 
@@ -34,31 +35,613 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  static final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
+  final GlobalKey<NavigatorState> _navKey = GlobalKey<NavigatorState>();
   bool isSignedIn = FirebaseAuth.instance.currentUser != null;
-  String? accountId; // currently active account
-  List<String> linkedAccounts = const []; // all accounts the user can switch to
+  String? accountId;
+  List<String> linkedAccounts = const [];
+  String? _lastUid;
   late final Stream<User?> _authSub;
+
+  // Exposed as a VoidCallback; runs async work in the background.
+  void _afterSignIn() {
+    () async {
+      await _afterSignInImpl();
+    }();
+  }
+
+  Future<void> _afterSignInImpl() async {
+    final box = await Hive.openBox('budgetBox');
+    final user = FirebaseAuth.instance.currentUser;
+    final uid = user?.uid;
+    if (uid == null) return; // defensive
+    final email = (user?.email ?? '').toString();
+    final linkedKey = 'linkedAccounts_$uid';
+    final activeKey = 'accountId_$uid';
+    final userDocIdKey = 'userDocId_$uid';
+    String? active = box.get(activeKey) as String?;
+    List<String> savedAccounts = List<String>.from(box.get(linkedKey) ?? []);
+
+    // 1) Prefer adopting an existing user doc by email; do not create a new one if one exists
+    String accountNumber = '';
+    try {
+      final usersCol = FirebaseFirestore.instance.collection('users');
+      final emailKey = email.trim().toLowerCase();
+      // Prefer a previously adopted user doc id if present
+      final persistedUserDocId = box.get(userDocIdKey) as String?;
+      DocumentSnapshot<Map<String, dynamic>>? adopted;
+      String? mappedIdFromMapping;
+      bool mappingDocExists = false;
+      // Track if mapping points to a missing doc (not used directly, but indicates repair path)
+      if (persistedUserDocId != null && persistedUserDocId.isNotEmpty) {
+        try {
+          final snap = await usersCol.doc(persistedUserDocId).get();
+          if (snap.exists) {
+            adopted = snap;
+          }
+        } catch (_) {}
+      }
+      // Check global mapping userEmails/<emailLower> for canonical user doc id
+      if (adopted == null) {
+        try {
+          final mappingRef = FirebaseFirestore.instance
+              .collection('userEmails')
+              .doc(emailKey);
+          final m = await mappingRef.get();
+          if (m.exists) {
+            final data = m.data();
+            final mappedId =
+                ((data ?? const <String, dynamic>{})['userDocId'] ?? '')
+                    as String;
+            if (mappedId.isNotEmpty) {
+              mappingDocExists = true;
+              mappedIdFromMapping = mappedId;
+              final snap = await usersCol.doc(mappedId).get();
+              if (snap.exists) {
+                adopted = snap;
+              } else {
+                // Mapping points to a missing doc; we'll repair it when we write chosen
+              }
+            }
+          }
+        } catch (_) {}
+      }
+      // Try case-insensitive matching: first by emailLower, then fallbacks by email
+      List<DocumentSnapshot<Map<String, dynamic>>> candidates = [];
+      if (adopted == null) {
+        final byLower = await usersCol
+            .where('emailLower', isEqualTo: emailKey)
+            .limit(20)
+            .get();
+        candidates = byLower.docs
+            .cast<DocumentSnapshot<Map<String, dynamic>>>();
+      }
+      if (candidates.isEmpty) {
+        final exact = await usersCol
+            .where('email', isEqualTo: email)
+            .limit(20)
+            .get();
+        candidates = exact.docs.cast<DocumentSnapshot<Map<String, dynamic>>>();
+        if (candidates.isEmpty && emailKey != email) {
+          final lowerOnEmail = await usersCol
+              .where('email', isEqualTo: emailKey)
+              .limit(20)
+              .get();
+          candidates = lowerOnEmail.docs
+              .cast<DocumentSnapshot<Map<String, dynamic>>>();
+        }
+        // Legacy field fallbacks for older user docs that may not have 'email' or 'emailLower'
+        if (candidates.isEmpty) {
+          for (final field in const [
+            'mail',
+            'emailAddress',
+            'userEmail',
+            'gmail',
+            'username',
+          ]) {
+            final q1 = await usersCol
+                .where(field, isEqualTo: email)
+                .limit(20)
+                .get();
+            if (q1.docs.isNotEmpty) {
+              candidates = q1.docs
+                  .cast<DocumentSnapshot<Map<String, dynamic>>>();
+              break;
+            }
+            final q2 = await usersCol
+                .where(field, isEqualTo: emailKey)
+                .limit(20)
+                .get();
+            if (q2.docs.isNotEmpty) {
+              candidates = q2.docs
+                  .cast<DocumentSnapshot<Map<String, dynamic>>>();
+              break;
+            }
+          }
+        }
+      }
+      if (adopted == null && candidates.isEmpty) {
+        // Try direct doc IDs that may have been used historically
+        final emailIdSnap = await usersCol.doc(email).get();
+        if (emailIdSnap.exists) {
+          candidates = [emailIdSnap];
+        } else {
+          final emailLowerIdSnap = await usersCol.doc(emailKey).get();
+          if (emailLowerIdSnap.exists) {
+            candidates = [emailLowerIdSnap];
+          }
+        }
+      }
+      if (adopted == null && candidates.isEmpty) {
+        // As a final attempt, search by uid field in any user doc
+        final byUid = await usersCol
+            .where('uid', isEqualTo: uid)
+            .limit(20)
+            .get();
+        if (byUid.docs.isNotEmpty) {
+          candidates = byUid.docs
+              .cast<DocumentSnapshot<Map<String, dynamic>>>();
+        }
+      }
+      if (adopted != null || candidates.isNotEmpty) {
+        // Pick a doc that already has an accountNumber, otherwise first
+        DocumentSnapshot<Map<String, dynamic>> chosen;
+        if (adopted != null) {
+          chosen = adopted;
+        } else {
+          try {
+            chosen = candidates.firstWhere(
+              (d) =>
+                  (((d.data() ?? const <String, dynamic>{})['accountNumber'] ??
+                              '')
+                          .toString())
+                      .isNotEmpty,
+            );
+          } catch (_) {
+            chosen = candidates.first;
+          }
+        }
+        var data = chosen.data() ?? <String, dynamic>{};
+        accountNumber = (data['accountNumber'] ?? '').toString();
+
+        // Ensure chosen has uid/email/dateCreated
+        await chosen.reference.set({
+          'uid': uid,
+          'email': email,
+          'emailLower': emailKey,
+          if ((data['dateCreated']) == null)
+            'dateCreated': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+
+        // Ensure an accountNumber exists on the chosen doc
+        if (accountNumber.isEmpty) {
+          String genSuffix(int n) {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            final r = Random();
+            return String.fromCharCodes(
+              List.generate(
+                n,
+                (_) => chars.codeUnitAt(r.nextInt(chars.length)),
+              ),
+            );
+          }
+
+          accountNumber = 'BB-${genSuffix(6)}-0001';
+          await chosen.reference.set({
+            'accountNumber': accountNumber,
+          }, SetOptions(merge: true));
+        }
+
+        // Best-effort delete other duplicates for this email/emailLower
+        for (final d in candidates) {
+          if (d.id != chosen.id) {
+            try {
+              await d.reference.delete();
+            } catch (_) {
+              // ignore permission/rules failures
+            }
+          }
+        }
+        // Also clean up a stray users/<uid> if it's a different doc than chosen
+        try {
+          final uidRef = usersCol.doc(uid);
+          final uidSnap = await uidRef.get();
+          if (uidSnap.exists && uidSnap.id != chosen.id) {
+            await uidRef.delete();
+          }
+        } catch (_) {}
+        // Persist adopted doc id so we use the same one next time
+        await box.put(userDocIdKey, chosen.id);
+        // Write/update mapping so other devices adopt the same doc id (repairs stale mapping)
+        try {
+          await FirebaseFirestore.instance
+              .collection('userEmails')
+              .doc(emailKey)
+              .set({
+                'userDocId': chosen.id,
+                'emailLower': emailKey,
+                'email': email,
+                'uid': uid,
+                'updatedAt': FieldValue.serverTimestamp(),
+              }, SetOptions(merge: true));
+        } catch (_) {}
+      } else {
+        // No user doc exists for this email; enforce canonical mapping via transaction
+        String ensureAccountNumber() {
+          String genSuffix(int n) {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            final r = Random();
+            return String.fromCharCodes(
+              List.generate(
+                n,
+                (_) => chars.codeUnitAt(r.nextInt(chars.length)),
+              ),
+            );
+          }
+
+          final acc = 'BB-${genSuffix(6)}-0001';
+          return acc;
+        }
+
+        // Case A: Mapping exists -> create/repair the mapped user doc atomically
+        if (mappingDocExists &&
+            (mappedIdFromMapping != null && mappedIdFromMapping.isNotEmpty)) {
+          final mappedId =
+              mappedIdFromMapping; // non-null, enforced by check above
+          await FirebaseFirestore.instance.runTransaction((tx) async {
+            final mappingRef = FirebaseFirestore.instance
+                .collection('userEmails')
+                .doc(emailKey);
+            final userRef = usersCol.doc(mappedId);
+            final mSnap = await tx.get(mappingRef);
+            // Keep mapping doc in sync and (re)create missing user doc at mapped id
+            final uSnap = await tx.get(userRef);
+            Map<String, dynamic> newData = {
+              'uid': uid,
+              'email': email,
+              'emailLower': emailKey,
+              'dateCreated': FieldValue.serverTimestamp(),
+            };
+            if (!uSnap.exists) {
+              accountNumber = ensureAccountNumber();
+              newData['accountNumber'] = accountNumber;
+              tx.set(userRef, newData);
+            } else {
+              final data = uSnap.data();
+              accountNumber = ((data?['accountNumber']) ?? '').toString();
+              tx.set(userRef, newData, SetOptions(merge: true));
+            }
+            final mappingData = {
+              'userDocId': mappedId,
+              'emailLower': emailKey,
+              'email': email,
+              'uid': uid,
+              if (!mSnap.exists) 'createdAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            };
+            tx.set(mappingRef, mappingData, SetOptions(merge: true));
+          });
+          await box.put(userDocIdKey, mappedId);
+          // Best-effort duplicate cleanup (keep only mappedId for this email)
+          try {
+            final dupQ = await usersCol
+                .where('emailLower', isEqualTo: emailKey)
+                .get();
+            for (final d in dupQ.docs) {
+              if (d.id != mappedId) {
+                try {
+                  await d.reference.delete();
+                } catch (_) {}
+              }
+            }
+          } catch (_) {}
+        } else {
+          // Case B: No mapping exists -> atomically claim mapping and create the user doc
+          final proposedId = emailKey.isNotEmpty ? emailKey : uid;
+          bool claimed = false;
+          try {
+            await FirebaseFirestore.instance.runTransaction((tx) async {
+              final mappingRef = FirebaseFirestore.instance
+                  .collection('userEmails')
+                  .doc(emailKey);
+              final mSnap = await tx.get(mappingRef);
+              if (mSnap.exists) {
+                // Someone else claimed; abort this path
+                return;
+              }
+              final userRef = usersCol.doc(proposedId);
+              final uSnap = await tx.get(userRef);
+              if (!uSnap.exists) {
+                accountNumber = ensureAccountNumber();
+                tx.set(userRef, {
+                  'uid': uid,
+                  'email': email,
+                  'emailLower': emailKey,
+                  'accountNumber': accountNumber,
+                  'dateCreated': FieldValue.serverTimestamp(),
+                });
+              } else {
+                final data = uSnap.data();
+                accountNumber = ((data?['accountNumber']) ?? '').toString();
+                tx.set(userRef, {
+                  'uid': uid,
+                  'email': email,
+                  'emailLower': emailKey,
+                  if ((data?['dateCreated']) == null)
+                    'dateCreated': FieldValue.serverTimestamp(),
+                }, SetOptions(merge: true));
+              }
+              tx.set(mappingRef, {
+                'userDocId': proposedId,
+                'emailLower': emailKey,
+                'email': email,
+                'uid': uid,
+                'createdAt': FieldValue.serverTimestamp(),
+                'updatedAt': FieldValue.serverTimestamp(),
+              });
+              claimed = true;
+            });
+          } catch (_) {}
+
+          if (claimed) {
+            await box.put(userDocIdKey, proposedId);
+            // Best-effort duplicate cleanup (keep only proposedId for this email)
+            try {
+              final dupQ = await usersCol
+                  .where('emailLower', isEqualTo: emailKey)
+                  .get();
+              for (final d in dupQ.docs) {
+                if (d.id != proposedId) {
+                  try {
+                    await d.reference.delete();
+                  } catch (_) {}
+                }
+              }
+            } catch (_) {}
+          } else {
+            // Mapping was claimed by another client; adopt it now
+            try {
+              final mappingSnap = await FirebaseFirestore.instance
+                  .collection('userEmails')
+                  .doc(emailKey)
+                  .get();
+              final mapped =
+                  ((mappingSnap.data() ??
+                              const <String, dynamic>{})['userDocId'] ??
+                          '')
+                      as String;
+              if (mapped.isNotEmpty) {
+                final chosen = await usersCol.doc(mapped).get();
+                if (chosen.exists) {
+                  final data = chosen.data() ?? <String, dynamic>{};
+                  accountNumber = (data['accountNumber'] ?? '').toString();
+                  await chosen.reference.set({
+                    'uid': uid,
+                    'email': email,
+                    'emailLower': emailKey,
+                    if ((data['dateCreated']) == null)
+                      'dateCreated': FieldValue.serverTimestamp(),
+                  }, SetOptions(merge: true));
+                  await box.put(userDocIdKey, mapped);
+                  // Best-effort duplicate cleanup
+                  try {
+                    final dupQ = await usersCol
+                        .where('emailLower', isEqualTo: emailKey)
+                        .get();
+                    for (final d in dupQ.docs) {
+                      if (d.id != mapped) {
+                        try {
+                          await d.reference.delete();
+                        } catch (_) {}
+                      }
+                    }
+                  } catch (_) {}
+                }
+              }
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {
+      // Firestore may be unreachable; fall back to a deterministic local number
+      final sub = uid.length >= 6 ? uid.substring(0, 6) : uid;
+      accountNumber = 'BB-$sub-0001';
+    }
+
+    // 2) Load existing accounts for this user; include personal accountNumber
+    if (active == null) {
+      try {
+        final q1 = await FirebaseFirestore.instance
+            .collection('accounts')
+            .where('members', arrayContains: uid)
+            .limit(10)
+            .get();
+        var docs = q1.docs;
+        if (docs.isEmpty) {
+          final q2 = await FirebaseFirestore.instance
+              .collection('accounts')
+              .where('createdBy', isEqualTo: uid)
+              .limit(10)
+              .get();
+          docs = q2.docs;
+        }
+        // Keep original order of fetched account ids (member/owner)
+        final fetchedOrdered = docs.map((d) => d.id).toList();
+        // Append personal accountNumber to the end (do not make it default)
+        if (accountNumber.isNotEmpty &&
+            !fetchedOrdered.contains(accountNumber)) {
+          fetchedOrdered.add(accountNumber);
+        }
+        if (fetchedOrdered.isNotEmpty) {
+          final seen = <String>{...fetchedOrdered};
+          for (final k in box.keys) {
+            if (k is String && k.startsWith('linkedAccounts_')) {
+              final v = box.get(k);
+              if (v is List && v.isNotEmpty) {
+                seen.addAll(v.whereType<String>());
+              }
+            }
+          }
+          final legacy = box.get('linkedAccounts');
+          if (legacy is List && legacy.isNotEmpty) {
+            seen.addAll(legacy.whereType<String>());
+          }
+          savedAccounts = seen.toList();
+          // Choose active: keep previous if valid, else prefer the first real shared account
+          if (active == null || !savedAccounts.contains(active)) {
+            final real = fetchedOrdered
+                .where((id) => id != accountNumber)
+                .toList();
+            active = real.isNotEmpty ? real.first : fetchedOrdered.first;
+          }
+          await box.put(linkedKey, savedAccounts);
+          await box.put(activeKey, active);
+        }
+      } catch (_) {
+        // Ignore; we'll provision locally if needed
+      }
+    }
+
+    // 3) Provision a local personal account if still none
+    if (active == null) {
+      String genId() {
+        const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+        const digits = '23456789';
+        final r = Random();
+        String pick(int n, String chars) => String.fromCharCodes(
+          List.generate(n, (_) => chars.codeUnitAt(r.nextInt(chars.length))),
+        );
+        return 'BB-${pick(4, letters)}-${pick(4, digits)}';
+      }
+
+      String personalId = genId();
+      int attempts = 0;
+      while (savedAccounts.contains(personalId) && attempts < 5) {
+        personalId = genId();
+        attempts++;
+      }
+      final accNum2 = accountNumber;
+      active = accNum2.isNotEmpty ? accNum2 : personalId;
+      if (!savedAccounts.contains(active)) {
+        savedAccounts.insert(0, active);
+      }
+      final seen = <String>{...savedAccounts};
+      for (final k in box.keys) {
+        if (k is String && k.startsWith('linkedAccounts_')) {
+          final v = box.get(k);
+          if (v is List && v.isNotEmpty) {
+            seen.addAll(v.whereType<String>());
+          }
+        }
+      }
+      final legacy = box.get('linkedAccounts');
+      if (legacy is List && legacy.isNotEmpty) {
+        seen.addAll(legacy.whereType<String>());
+      }
+      savedAccounts = seen.toList();
+      await box.put(linkedKey, savedAccounts);
+      await box.put(activeKey, active);
+    }
+
+    // Persist merged list for this user and device-wide bucket
+    final mergedForUser = <String>{...savedAccounts};
+    for (final k in box.keys) {
+      if (k is String && k.startsWith('linkedAccounts_')) {
+        final v = box.get(k);
+        if (v is List && v.isNotEmpty) {
+          mergedForUser.addAll(v.whereType<String>());
+        }
+      }
+    }
+    final legacy2 = box.get('linkedAccounts');
+    if (legacy2 is List && legacy2.isNotEmpty) {
+      mergedForUser.addAll(legacy2.whereType<String>());
+    }
+    final mergedList = mergedForUser.toList()..sort();
+    await box.put(linkedKey, mergedList);
+    final deviceKey = 'linkedAccounts_device';
+    final devVal = box.get(deviceKey);
+    final devSet = <String>{
+      ...mergedList,
+      if (devVal is List) ...devVal.whereType<String>(),
+    };
+    await box.put(deviceKey, devSet.toList()..sort());
+
+    if (!mounted) return;
+    setState(() {
+      isSignedIn = true;
+      accountId = active;
+      linkedAccounts = mergedList;
+    });
+
+    // Reset navigation to main tabs
+    _navKey.currentState?.pushAndRemoveUntil(
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) => MainTabsScaffold(
+          activeAccountId: accountId,
+          linkedAccounts: linkedAccounts,
+          onSwitchAccount: (id) async {
+            final box2 = await Hive.openBox('budgetBox');
+            final uid2 = FirebaseAuth.instance.currentUser?.uid;
+            final activeKey2 = uid2 != null ? 'accountId_$uid2' : 'accountId';
+            await box2.put(activeKey2, id);
+            if (mounted) setState(() => accountId = id);
+          },
+          onAccountsChanged: (list) async {
+            final box2 = await Hive.openBox('budgetBox');
+            final uid2 = FirebaseAuth.instance.currentUser?.uid;
+            final linkedKey2 = uid2 != null
+                ? 'linkedAccounts_$uid2'
+                : 'linkedAccounts';
+            await box2.put(linkedKey2, list);
+            if (mounted)
+              setState(() => linkedAccounts = List<String>.from(list));
+          },
+        ),
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+      ),
+      (route) => false,
+    );
+  }
 
   @override
   void initState() {
     super.initState();
+    _lastUid = FirebaseAuth.instance.currentUser?.uid;
     _bootstrapFromLocal();
     // React to sign-in/sign-out
     _authSub = FirebaseAuth.instance.authStateChanges();
     _authSub.listen((user) async {
       final signedInNow = user != null;
+      if (user != null) {
+        _lastUid = user.uid;
+      }
       if (mounted && signedInNow != isSignedIn) {
         setState(() => isSignedIn = signedInNow);
         if (!signedInNow) {
           // Clear any per-user active selection (kept per uid)
           final box = await Hive.openBox('budgetBox');
-          final prevUid = user?.uid;
+          final prevUid = _lastUid;
           if (prevUid != null) {
+            // Keep linkedAccounts_<uid> to preserve device-known accounts for UI aggregation
             await box.delete('accountId_$prevUid');
-            await box.delete('linkedAccounts_$prevUid');
           }
+          _lastUid = null;
           setState(() => accountId = null);
+          // Hard reset the navigation stack to LoginPage
+          final ctx = _navKey.currentContext;
+          if (ctx != null) {
+            _navKey.currentState?.pushAndRemoveUntil(
+              PageRouteBuilder(
+                pageBuilder: (_, __, ___) => LoginPage(onSignIn: _afterSignIn),
+                transitionDuration: Duration.zero,
+                reverseTransitionDuration: Duration.zero,
+              ),
+              (route) => false,
+            );
+          }
+        } else {
+          // Signed in: no forced navigation here; onSignIn will handle provisioning and navigation.
         }
       }
     });
@@ -95,12 +678,14 @@ class _MyAppState extends State<MyApp> {
         }
       } catch (_) {}
     }
-    setState(() {
-      linkedAccounts = savedAccounts;
-      accountId =
-          savedActive ??
-          (savedAccounts.isNotEmpty ? savedAccounts.first : null);
-    });
+    if (mounted) {
+      setState(() {
+        linkedAccounts = savedAccounts;
+        accountId =
+            savedActive ??
+            (savedAccounts.isNotEmpty ? savedAccounts.first : null);
+      });
+    }
   }
 
   @override
@@ -118,7 +703,7 @@ class _MyAppState extends State<MyApp> {
                 final uid = FirebaseAuth.instance.currentUser?.uid;
                 final activeKey = uid != null ? 'accountId_$uid' : 'accountId';
                 await box.put(activeKey, id);
-                setState(() => accountId = id);
+                if (mounted) setState(() => accountId = id);
               },
               onAccountsChanged: (list) async {
                 final box = await Hive.openBox('budgetBox');
@@ -127,89 +712,11 @@ class _MyAppState extends State<MyApp> {
                     ? 'linkedAccounts_$uid'
                     : 'linkedAccounts';
                 await box.put(linkedKey, list);
-                setState(() => linkedAccounts = List<String>.from(list));
+                if (mounted)
+                  setState(() => linkedAccounts = List<String>.from(list));
               },
             )
-          : LoginPage(
-              onSignIn: () async {
-                final box = await Hive.openBox('budgetBox');
-                final user = FirebaseAuth.instance.currentUser;
-                final uid = user?.uid;
-                if (uid == null) return; // defensive
-                final linkedKey = 'linkedAccounts_$uid';
-                final activeKey = 'accountId_$uid';
-                String? active = box.get(activeKey) as String?;
-                List<String> savedAccounts = List<String>.from(
-                  box.get(linkedKey) ?? [],
-                );
-
-                // Prefer an existing account if available
-                if (active == null) {
-                  // Ignore any previous user's local list; derive from server for current uid
-                  try {
-                    final q1 = await FirebaseFirestore.instance
-                        .collection('accounts')
-                        .where('members', arrayContains: uid)
-                        .limit(10)
-                        .get();
-                    var docs = q1.docs;
-                    if (docs.isEmpty) {
-                      final q2 = await FirebaseFirestore.instance
-                          .collection('accounts')
-                          .where('createdBy', isEqualTo: uid)
-                          .limit(10)
-                          .get();
-                      docs = q2.docs;
-                    }
-                    if (docs.isNotEmpty) {
-                      savedAccounts = docs.map((d) => d.id).toSet().toList();
-                      active = savedAccounts.first;
-                      await box.put(linkedKey, savedAccounts);
-                      await box.put(activeKey, active);
-                    }
-                  } catch (_) {
-                    // Network or rules issue; fall back to local provisioning
-                  }
-                }
-
-                // If still no account, provision a new personal account id locally
-                if (active == null) {
-                  String genId() {
-                    const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-                    const digits = '23456789';
-                    final r = Random();
-                    String pick(int n, String chars) => String.fromCharCodes(
-                      List.generate(
-                        n,
-                        (_) => chars.codeUnitAt(r.nextInt(chars.length)),
-                      ),
-                    );
-                    return 'BB-${pick(4, letters)}-${pick(4, digits)}';
-                  }
-
-                  String personalId = genId();
-                  int attempts = 0;
-                  while (savedAccounts.contains(personalId) && attempts < 5) {
-                    personalId = genId();
-                    attempts++;
-                  }
-                  active = personalId;
-                  if (!savedAccounts.contains(active)) {
-                    savedAccounts.insert(0, active);
-                  }
-                  await box.put(linkedKey, savedAccounts);
-                  await box.put(activeKey, active);
-                }
-
-                setState(() {
-                  isSignedIn = true;
-                  accountId = active;
-                  linkedAccounts = List<String>.from(
-                    box.get(linkedKey) ?? (active != null ? [active] : []),
-                  );
-                });
-              },
-            ),
+          : LoginPage(onSignIn: _afterSignIn),
     );
   }
 
@@ -661,38 +1168,11 @@ class _AccountChooserState extends State<AccountChooser> {
                                       final ok = doc.exists;
                                       if (!mounted) return;
                                       if (ok) {
-                                        final data = doc.data() ?? {};
-                                        final isJoint =
-                                            (data['isJoint'] as bool?) ?? false;
-                                        final ownerEmail =
-                                            (data['createdByEmail']
-                                                as String?) ??
-                                            (data['ownerEmail'] as String?);
-                                        final ownerUid =
-                                            (data['createdBy'] as String?) ??
-                                            '';
-                                        final user =
-                                            FirebaseAuth.instance.currentUser;
-                                        final email = user?.email;
-                                        final uid = user?.uid ?? '';
+                                        // No additional validation required
 
-                                        final isOwner =
-                                            (email != null &&
-                                                ownerEmail != null &&
-                                                email.toLowerCase() ==
-                                                    ownerEmail.toLowerCase()) ||
-                                            (ownerUid.isNotEmpty &&
-                                                ownerUid == uid);
-
-                                        if (isJoint || isOwner) {
-                                          _addRecent(box, id);
-                                          widget.onConfirmed(id);
-                                        } else {
-                                          setState(
-                                            () => _error =
-                                                'This account is not joint. Only the owner can join.',
-                                          );
-                                        }
+                                        // Allow joining any existing account (no joint/owner restriction)
+                                        _addRecent(box, id);
+                                        widget.onConfirmed(id);
                                       } else {
                                         setState(
                                           () => _error =
@@ -892,9 +1372,6 @@ class _MainTabsPageProviderState extends State<MainTabsPageProvider> {
     if (!_ready) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    return MainTabsPage(
-      accountId: widget.accountId,
-      initialWarning: _ensureError,
-    );
+    return MainTabsPage(accountId: widget.accountId);
   }
 }

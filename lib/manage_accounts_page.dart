@@ -31,6 +31,25 @@ class _ManageAccountsPageState extends State<ManageAccountsPage> {
       accounts = List<String>.from(laLegacy ?? []);
       if (uid != null && accounts.isNotEmpty) box.put(linkedKey, accounts);
     }
+    // UI-only aggregation: include accounts known from other users on this device
+    final merged = <String>{...accounts};
+    final deviceKnown = box.get('linkedAccounts_device');
+    if (deviceKnown is List && deviceKnown.isNotEmpty) {
+      merged.addAll(deviceKnown.whereType<String>());
+    }
+    for (final k in box.keys) {
+      if (k is String && k.startsWith('linkedAccounts_')) {
+        final v = box.get(k);
+        if (v is List && v.isNotEmpty) {
+          merged.addAll(v.whereType<String>());
+        }
+      }
+    }
+    final legacy = box.get('linkedAccounts');
+    if (legacy is List && legacy.isNotEmpty) {
+      merged.addAll(legacy.whereType<String>());
+    }
+    accounts = merged.toList()..sort();
     final alUser = box.get(aliasesKey);
     if (alUser is Map && alUser.isNotEmpty) {
       aliases = Map<String, String>.from(
@@ -155,6 +174,14 @@ class _ManageAccountsPageState extends State<ManageAccountsPage> {
                             : 'accountId';
                         box.put(linkedKey, accounts);
                         box.put(aliasesKey, aliases);
+                        // Update device-wide bucket as well
+                        final deviceKey = 'linkedAccounts_device';
+                        final devSet = <String>{
+                          ...accounts,
+                          if (box.get(deviceKey) is List)
+                            ...List<String>.from(box.get(deviceKey)),
+                        }..remove(id);
+                        box.put(deviceKey, devSet.toList()..sort());
                         if (active == id) {
                           active = accounts.isNotEmpty ? accounts.first : null;
                           box.put(activeKey, active);

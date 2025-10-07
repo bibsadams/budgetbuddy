@@ -184,6 +184,50 @@
 				"--no-pub"
 			],
 			"group": "build"
+		},
+		{
+			"label": "Flutter Analyze BudgetBuddy",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"analyze",
+				"--no-pub"
+			],
+			"isBackground": false,
+			"group": "build"
+		},
+		{
+			"label": "Flutter Analyze BudgetBuddy",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"analyze",
+				"--no-pub"
+			],
+			"isBackground": false,
+			"group": "build"
+		},
+		{
+			"label": "Flutter Analyze BudgetBuddy",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"analyze",
+				"--no-pub"
+			],
+			"isBackground": false,
+			"group": "build"
+		},
+		{
+			"label": "Flutter Analyze BudgetBuddy",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"analyze",
+				"--no-pub"
+			],
+			"isBackground": false,
+			"group": "build"
 		}
 	]
 }

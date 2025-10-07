@@ -370,11 +370,7 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
         }
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to save to cloud: $e')));
-      }
+      // Suppress cloud error SnackBar per requirements; proceed to close with local data
     }
     if (mounted) Navigator.pop(context, out);
   }
@@ -405,10 +401,7 @@ class _CustomTabRecordEditPageState extends State<CustomTabRecordEditPage> {
         try {
           await widget.repo!.deleteCustomTabRecord(widget.tabId, id);
         } catch (e) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Cloud delete failed: $e')));
+          // Suppress cloud error SnackBar per requirements
         }
       }
       if (!mounted) return;

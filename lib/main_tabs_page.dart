@@ -30,8 +30,7 @@ import 'services/notification_service.dart';
 
 class MainTabsPage extends StatefulWidget {
   final String accountId;
-  final String? initialWarning;
-  const MainTabsPage({super.key, required this.accountId, this.initialWarning});
+  const MainTabsPage({super.key, required this.accountId});
 
   @override
   State<MainTabsPage> createState() => _MainTabsPageState();
@@ -41,7 +40,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
   // Data/state
   late final Box box;
   SharedAccountRepository? _repo;
-  String? _cloudWarning; // persistent banner for cloud permission issues
+  // Cloud warning banner suppressed by requirements
 
   // Streams
   Stream<List<Map<String, dynamic>>>? _expenses$;
@@ -99,6 +98,31 @@ class _MainTabsPageState extends State<MainTabsPage> {
       if (!mounted) return;
       _saveLocalOnly();
     });
+  }
+
+  // Returns a UI-only merged list of accounts from current user's list
+  // plus any other users' lists and the legacy global list stored on this device.
+  List<String> _aggregateAccountsForUi(List<String> base) {
+    final merged = <String>{...base.whereType<String>()};
+    // Include device-wide known accounts bucket
+    final deviceKnown = box.get('linkedAccounts_device');
+    if (deviceKnown is List && deviceKnown.isNotEmpty) {
+      merged.addAll(deviceKnown.whereType<String>());
+    }
+    for (final k in box.keys) {
+      if (k is String && k.startsWith('linkedAccounts_')) {
+        final v = box.get(k);
+        if (v is List && v.isNotEmpty) {
+          merged.addAll(v.whereType<String>());
+        }
+      }
+    }
+    final legacy = box.get('linkedAccounts');
+    if (legacy is List && legacy.isNotEmpty) {
+      merged.addAll(legacy.whereType<String>());
+    }
+    final list = merged.toList()..sort();
+    return list;
   }
 
   @override
@@ -475,6 +499,39 @@ class _MainTabsPageState extends State<MainTabsPage> {
         _linkedAccounts = laLegacy.whereType<String>().toList();
         box.put(linkedKey, _linkedAccounts);
       }
+      // Fallback: ensure at least the currently active account is present locally
+      if ((_linkedAccounts.isEmpty) && (widget.accountId.isNotEmpty)) {
+        _linkedAccounts = [widget.accountId];
+        box.put(linkedKey, _linkedAccounts);
+      }
+      // Aggregate accounts from other known users on this device (UI-only)
+      final merged = <String>{..._linkedAccounts};
+      for (final k in box.keys) {
+        if (k is String && k.startsWith('linkedAccounts_')) {
+          final v = box.get(k);
+          if (v is List && v.isNotEmpty) {
+            merged.addAll(v.whereType<String>());
+          }
+        }
+      }
+      final legacy = box.get('linkedAccounts');
+      if (legacy is List && legacy.isNotEmpty) {
+        merged.addAll(legacy.whereType<String>());
+      }
+      if (merged.isNotEmpty && merged.length != _linkedAccounts.length) {
+        _linkedAccounts = merged.toList()..sort();
+        // Do NOT overwrite the per-user key here; this is UI-only aggregation.
+      }
+    }
+    // Update device-wide known accounts set (never cleared on sign-out)
+    final deviceKey = 'linkedAccounts_device';
+    final deviceVal = box.get(deviceKey);
+    final deviceSet = <String>{
+      ..._linkedAccounts,
+      if (deviceVal is List) ...deviceVal.whereType<String>(),
+    };
+    if (deviceSet.isNotEmpty) {
+      box.put(deviceKey, deviceSet.toList()..sort());
     }
     final aliasesUser = box.get(aliasesKey);
     if (aliasesUser is Map && aliasesUser.isNotEmpty) {
@@ -1012,6 +1069,19 @@ class _MainTabsPageState extends State<MainTabsPage> {
     final uid = _uid;
     if (uid == null) return;
     final arr = {..._accMemberIds, ..._accOwnerIds}.toList()..sort();
+    // If streams returned empty (common during dev when App Check/rules block),
+    // don't wipe out the existing local list; preserve last known non-empty.
+    if (arr.isEmpty) {
+      final existing = box.get('linkedAccounts_$uid');
+      if (existing is List && existing.isNotEmpty) {
+        // Keep the current UI list; do not overwrite Hive with empty.
+        setState(() => _linkedAccounts = existing.whereType<String>().toList());
+        return;
+      }
+      // No existing cache either; leave empty but avoid writing empty redundantly.
+      setState(() => _linkedAccounts = const []);
+      return;
+    }
     setState(() => _linkedAccounts = arr);
     box.put('linkedAccounts_$uid', arr);
   }
@@ -1480,66 +1550,6 @@ class _MainTabsPageState extends State<MainTabsPage> {
                   padding: const EdgeInsets.only(bottom: 86),
                   child: Column(
                     children: [
-                      if (((widget.initialWarning ?? '').isNotEmpty) ||
-                          ((_cloudWarning ?? '').isNotEmpty))
-                        Material(
-                          color: Colors.amber.shade100,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 8,
-                            ),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Padding(
-                                  padding: EdgeInsets.only(top: 2),
-                                  child: Icon(
-                                    Icons.warning_amber_rounded,
-                                    size: 18,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      if ((widget.initialWarning ?? '')
-                                          .isNotEmpty)
-                                        Text(
-                                          widget.initialWarning!,
-                                          style: const TextStyle(fontSize: 12),
-                                        ),
-                                      if ((widget.initialWarning ?? '')
-                                              .isNotEmpty &&
-                                          (_cloudWarning ?? '').isNotEmpty)
-                                        const SizedBox(height: 4),
-                                      if ((_cloudWarning ?? '').isNotEmpty)
-                                        Text(
-                                          _cloudWarning!,
-                                          style: const TextStyle(fontSize: 12),
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                if ((_cloudWarning ?? '').isNotEmpty)
-                                  TextButton(
-                                    onPressed: _showCloudFixDialog,
-                                    child: const Text('How to fix'),
-                                  ),
-                                if ((_cloudWarning ?? '').isNotEmpty)
-                                  IconButton(
-                                    tooltip: 'Dismiss',
-                                    icon: const Icon(Icons.close, size: 18),
-                                    onPressed: () =>
-                                        setState(() => _cloudWarning = null),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
                       Expanded(
                         child: PageView.builder(
                           controller: _pageController,
@@ -1713,44 +1723,12 @@ class _MainTabsPageState extends State<MainTabsPage> {
   }
 
   void _showCloudWarning(Object e) {
-    String message = 'Saved locally. Cloud sync failed.';
-    if (e is FirebaseException) {
-      if (e.code == 'permission-denied') {
-        message =
-            'Cloud sync blocked by security: App Check or membership required.';
-      } else if (e.message != null && e.message!.isNotEmpty) {
-        message = 'Cloud sync failed: ${e.message}';
-      }
-    } else {
-      final s = e.toString();
-      if (s.contains('permission-denied')) {
-        message =
-            'Cloud sync blocked by security: App Check or membership required.';
-      } else {
-        message = 'Cloud sync failed: $s';
-      }
-    }
-    if (!mounted) return;
-    setState(() => _cloudWarning = message);
+    // Suppress cloud warning UI; keep silent to avoid blocking UX
+    // ignore: avoid_print
+    // print('Cloud sync error (suppressed): $e');
   }
 
-  void _showCloudFixDialog() {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Fix cloud sync'),
-        content: const Text(
-          'In development, enable App Check debug: run a debug build, copy the token from logs, and add it in Firebase Console → App Check → Debug tokens.\n\nAlso ensure you are a member of this account: the owner must approve your join request (Settings → Owner tools → Join requests). Then try again.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
-  }
+  // _showCloudFixDialog removed per requirements
 
   // Settings
   Widget _buildSettingsPage() {
@@ -2618,6 +2596,22 @@ class _MainTabsPageState extends State<MainTabsPage> {
 
   void _showAccountSwitcher(BuildContext context) async {
     final cs = Theme.of(context).colorScheme;
+    final list = _aggregateAccountsForUi(_linkedAccounts);
+    // Persist aggregated list into current user's per-user key so future reads match
+    final uid = _uid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      final linkedKey = 'linkedAccounts_$uid';
+      await box.put(linkedKey, list);
+      // Also persist to device-wide bucket
+      final deviceKey = 'linkedAccounts_device';
+      final devVal = box.get(deviceKey);
+      final devSet = <String>{
+        ...list,
+        if (devVal is List) ...devVal.whereType<String>(),
+      };
+      await box.put(deviceKey, devSet.toList()..sort());
+      if (mounted) setState(() => _linkedAccounts = list);
+    }
     final selected = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2626,9 +2620,9 @@ class _MainTabsPageState extends State<MainTabsPage> {
           width: 360,
           child: ListView.builder(
             shrinkWrap: true,
-            itemCount: _linkedAccounts.length,
+            itemCount: list.length,
             itemBuilder: (c, i) {
-              final id = _linkedAccounts[i];
+              final id = list[i];
               final isActive = id == widget.accountId;
               return ListTile(
                 leading: Icon(Icons.credit_card, color: cs.primary),
@@ -2714,10 +2708,6 @@ class _MainTabsPageState extends State<MainTabsPage> {
                         // Validate account
                         final acc = await repo.getAccountOnce();
                         if (acc == null) throw 'Account not found';
-                        final isJoint = (acc['isJoint'] as bool?) ?? false;
-                        if (!isJoint) {
-                          throw 'Only joint accounts can be linked. Ask the owner to enable Joint first.';
-                        }
                         final members = List<String>.from(acc['members'] ?? []);
                         final myUid = user.uid;
                         if (members.contains(myUid)) {
@@ -2936,11 +2926,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
           if (!desiredById.containsKey(id)) {
             // Firestore delete
             _repo!.deleteExpense(id).catchError((e) {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Failed to delete expense: $e')),
-                );
-              }
+              // Suppress delete error SnackBar per requirements
             });
             // Local receipt cleanup
             _localReceiptPathsExpenses.remove(id);
@@ -3166,15 +3152,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
                           }
                         }
                       } catch (e) {
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Cloud save failed. Kept locally. Use Settings > Validate cloud setup.',
-                              ),
-                            ),
-                          );
-                        }
+                        // Suppress cloud error SnackBar per requirements; keep local changes only
                       }
                       if (mounted) _saveLocalOnly();
                       if (mounted) {
@@ -3450,15 +3428,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
                           }
                         }
                       } catch (e) {
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Cloud save failed. Kept locally. Use Settings > Validate cloud setup.',
-                              ),
-                            ),
-                          );
-                        }
+                        // Suppress cloud error SnackBar per requirements; keep local changes only
                       }
                       if (mounted) _saveLocalOnly();
                       if (mounted) {
@@ -3937,9 +3907,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
     } catch (e) {
       if (mounted) {
         _showCloudWarning(e);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Saved locally. Cloud sync failed: $e')),
-        );
+        // Suppress SnackBar: keep silent to avoid blocking UX; data remains saved locally
       }
     }
   }
@@ -4855,9 +4823,6 @@ class _EnsureAndOpenState extends State<_EnsureAndOpen> {
     if (!_ready) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    return MainTabsPage(
-      accountId: widget.accountId,
-      initialWarning: _ensureError,
-    );
+    return MainTabsPage(accountId: widget.accountId);
   }
 }
