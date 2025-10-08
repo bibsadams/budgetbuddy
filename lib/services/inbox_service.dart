@@ -31,17 +31,20 @@ class InboxService {
         .orderBy('createdAt', descending: false)
         .snapshots()
         .listen((qs) async {
-          for (final d in qs.docChanges) {
-            if (d.type != DocumentChangeType.added) continue;
-            final data = d.doc.data() ?? {};
+          for (final change in qs.docChanges) {
+            // Handle both added and modified to cover serverTimestamp updates
+            if (change.type != DocumentChangeType.added &&
+                change.type != DocumentChangeType.modified)
+              continue;
+            final data = change.doc.data() ?? {};
             final title = (data['title'] as String?) ?? 'Notification';
             final body = (data['body'] as String?) ?? '';
-            // Show local notification
-            final id = (title + body).hashCode & 0x7fffffff;
+            // Use doc id to avoid notification id collisions on similar messages
+            final id = (title + body + change.doc.id).hashCode & 0x7fffffff;
             await NotificationService().showNow(id, title: title, body: body);
             // Mark acknowledged to avoid repeats
             try {
-              await d.doc.reference.set({
+              await change.doc.reference.set({
                 'acknowledged': true,
                 'acknowledgedAt': FieldValue.serverTimestamp(),
               }, SetOptions(merge: true));

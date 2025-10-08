@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'services/shared_account_repository.dart';
 import 'services/notification_service.dart';
 
 class ManageAccountsPage extends StatefulWidget {
@@ -23,35 +22,23 @@ class _ManageAccountsPageState extends State<ManageAccountsPage> {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     final linkedKey = uid != null ? 'linkedAccounts_$uid' : 'linkedAccounts';
     final aliasesKey = uid != null ? 'accountAliases_$uid' : 'accountAliases';
-    final activeKey = uid != null ? 'accountId_$uid' : 'accountId';
     // Read per-user with migration from legacy global keys
     final laUser = box.get(linkedKey);
-    if (laUser is List && laUser.isNotEmpty) {
-      accounts = List<String>.from(laUser);
-    } else {
-      final laLegacy = box.get('linkedAccounts');
-      accounts = List<String>.from(laLegacy ?? []);
-      if (uid != null && accounts.isNotEmpty) box.put(linkedKey, accounts);
-    }
-    // UI-only aggregation: include accounts known from other users on this device
-    final merged = <String>{...accounts};
-    final deviceKnown = box.get('linkedAccounts_device');
-    if (deviceKnown is List && deviceKnown.isNotEmpty) {
-      merged.addAll(deviceKnown.whereType<String>());
-    }
-    for (final k in box.keys) {
-      if (k is String && k.startsWith('linkedAccounts_')) {
-        final v = box.get(k);
-        if (v is List && v.isNotEmpty) {
-          merged.addAll(v.whereType<String>());
-        }
-      }
-    }
-    final legacy = box.get('linkedAccounts');
-    if (legacy is List && legacy.isNotEmpty) {
-      merged.addAll(legacy.whereType<String>());
-    }
-    accounts = merged.toList()..sort();
+    final base = (laUser is List)
+        ? laUser.whereType<String>().toList()
+        : <String>[];
+    // Read active before computing the final set (we'll ensure it's included)
+    active =
+        (uid != null
+            ? box.get('accountId_$uid') as String?
+            : box.get('accountId') as String?) ??
+        box.get('accountId') as String?;
+    // For display only, union with device-known list so previously used accounts are visible.
+    final dev = box.get('linkedAccounts_device');
+    final set = <String>{...base, if (dev is List) ...dev.whereType<String>()};
+    // Ensure active account shows up even if neither list includes it yet
+    if ((active ?? '').isNotEmpty) set.add(active!);
+    accounts = set.toList()..sort();
     final alUser = box.get(aliasesKey);
     if (alUser is Map && alUser.isNotEmpty) {
       aliases = Map<String, String>.from(
@@ -66,8 +53,7 @@ class _ManageAccountsPageState extends State<ManageAccountsPage> {
       );
       if (uid != null && aliases.isNotEmpty) box.put(aliasesKey, aliases);
     }
-    final legacyActive = box.get('accountId') as String?;
-    active = box.get(activeKey) as String? ?? legacyActive;
+    // aliases and active already loaded
   }
 
   @override
@@ -179,10 +165,9 @@ class _ManageAccountsPageState extends State<ManageAccountsPage> {
                         box.put(aliasesKey, aliases);
                         // Update device-wide bucket as well
                         final deviceKey = 'linkedAccounts_device';
+                        final prevDev = box.get(deviceKey);
                         final devSet = <String>{
-                          ...accounts,
-                          if (box.get(deviceKey) is List)
-                            ...List<String>.from(box.get(deviceKey)),
+                          if (prevDev is List) ...prevDev.whereType<String>(),
                         }..remove(id);
                         box.put(deviceKey, devSet.toList()..sort());
                         if (active == id) {
@@ -235,26 +220,13 @@ class _ManageAccountsPageState extends State<ManageAccountsPage> {
                 box.put(linkedKey, accounts);
                 // Update device-wide bucket for aggregation
                 final deviceKey = 'linkedAccounts_device';
+                final prevDev = box.get(deviceKey);
                 final devSet = <String>{
-                  ...accounts,
-                  if (box.get(deviceKey) is List)
-                    ...List<String>.from(box.get(deviceKey)),
-                };
+                  if (prevDev is List) ...prevDev.whereType<String>(),
+                }..add(id);
                 box.put(deviceKey, devSet.toList()..sort());
               }
             });
-            // Best-effort: ensure membership remotely to trigger notifications
-            try {
-              final user = FirebaseAuth.instance.currentUser;
-              final uid = user?.uid;
-              if (uid != null) {
-                final repo = SharedAccountRepository(accountId: id, uid: uid);
-                await repo.ensureMembership(
-                  displayName: user?.displayName,
-                  email: user?.email,
-                );
-              }
-            } catch (_) {}
             // Immediate local feedback notification
             try {
               await NotificationService().showNow(

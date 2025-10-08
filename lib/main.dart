@@ -66,6 +66,18 @@ class _MyAppState extends State<MyApp> {
     final userDocIdKey = 'userDocId_$uid';
     String? active = box.get(activeKey) as String?;
     List<String> savedAccounts = List<String>.from(box.get(linkedKey) ?? []);
+    // Per-user stable personal account number key/value
+    final personalKey = 'personalAccountNumber_$uid';
+    // If we cannot reach/repair the user doc (rules/offline), prefer the
+    // personal account first as the active account to avoid confusing state.
+    bool preferPersonalFirst = false;
+    String? storedPersonal;
+    try {
+      final pv = box.get(personalKey);
+      storedPersonal = pv is String && pv.isNotEmpty ? pv : null;
+    } catch (_) {
+      storedPersonal = null;
+    }
 
     // 1) Prefer adopting an existing user doc by email; do not create a new one if one exists
     String accountNumber = '';
@@ -469,27 +481,38 @@ class _MyAppState extends State<MyApp> {
         }
       }
     } catch (_) {
-      // Firestore may be unreachable; fall back to a random number with the standard format
-      String genLetters(int n) {
-        const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-        final r = Random();
-        return String.fromCharCodes(
-          List.generate(
-            n,
-            (_) => letters.codeUnitAt(r.nextInt(letters.length)),
-          ),
-        );
-      }
+      // Firestore may be unreachable; prefer stored personal number if available
+      preferPersonalFirst = true;
+      if (storedPersonal != null && storedPersonal.isNotEmpty) {
+        accountNumber = storedPersonal;
+      } else {
+        String genLetters(int n) {
+          const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+          final r = Random();
+          return String.fromCharCodes(
+            List.generate(
+              n,
+              (_) => letters.codeUnitAt(r.nextInt(letters.length)),
+            ),
+          );
+        }
 
-      String genDigits(int n) {
-        const digits = '0123456789';
-        final r = Random();
-        return String.fromCharCodes(
-          List.generate(n, (_) => digits.codeUnitAt(r.nextInt(digits.length))),
-        );
-      }
+        String genDigits(int n) {
+          const digits = '0123456789';
+          final r = Random();
+          return String.fromCharCodes(
+            List.generate(
+              n,
+              (_) => digits.codeUnitAt(r.nextInt(digits.length)),
+            ),
+          );
+        }
 
-      accountNumber = 'BB-${genLetters(4)}-${genDigits(4)}';
+        accountNumber = 'BB-${genLetters(4)}-${genDigits(4)}';
+        try {
+          await box.put(personalKey, accountNumber);
+        } catch (_) {}
+      }
     }
 
     // 2) Load existing accounts for this user; include personal accountNumber
@@ -531,12 +554,19 @@ class _MyAppState extends State<MyApp> {
             seen.addAll(legacy.whereType<String>());
           }
           savedAccounts = seen.toList();
-          // Choose active: keep previous if valid, else prefer the first real shared account
+          // Choose active: if user doc couldn't be repaired/reached, prefer
+          // the personal account first; otherwise prefer a real shared account.
           if (active == null || !savedAccounts.contains(active)) {
-            final real = fetchedOrdered
-                .where((id) => id != accountNumber)
-                .toList();
-            active = real.isNotEmpty ? real.first : fetchedOrdered.first;
+            if (preferPersonalFirst &&
+                accountNumber.isNotEmpty &&
+                fetchedOrdered.contains(accountNumber)) {
+              active = accountNumber;
+            } else {
+              final real = fetchedOrdered
+                  .where((id) => id != accountNumber)
+                  .toList();
+              active = real.isNotEmpty ? real.first : fetchedOrdered.first;
+            }
           }
           await box.put(linkedKey, savedAccounts);
           await box.put(activeKey, active);
@@ -558,7 +588,8 @@ class _MyAppState extends State<MyApp> {
         return 'BB-${pick(4, letters)}-${pick(4, digits)}';
       }
 
-      String personalId = genId();
+      // Prefer a previously stored personal account number if present
+      String personalId = storedPersonal ?? genId();
       int attempts = 0;
       while (savedAccounts.contains(personalId) && attempts < 5) {
         personalId = genId();
@@ -569,6 +600,13 @@ class _MyAppState extends State<MyApp> {
       if (!savedAccounts.contains(active)) {
         savedAccounts.insert(0, active);
       }
+      // Persist personal id if we just established it
+      try {
+        if ((storedPersonal == null || storedPersonal.isEmpty) &&
+            active.isNotEmpty) {
+          await box.put(personalKey, personalId);
+        }
+      } catch (_) {}
       final seen = <String>{...savedAccounts};
       for (final k in box.keys) {
         if (k is String && k.startsWith('linkedAccounts_')) {
@@ -602,7 +640,9 @@ class _MyAppState extends State<MyApp> {
       mergedForUser.addAll(legacy2.whereType<String>());
     }
     final mergedList = mergedForUser.toList()..sort();
-    await box.put(linkedKey, mergedList);
+    // Do NOT overwrite the user's own linked list with the merged set.
+    // Keep only their own savedAccounts in linkedKey to allow local removals to persist.
+    await box.put(linkedKey, savedAccounts);
     final deviceKey = 'linkedAccounts_device';
     final devVal = box.get(deviceKey);
     final devSet = <String>{
@@ -615,8 +655,13 @@ class _MyAppState extends State<MyApp> {
     setState(() {
       isSignedIn = true;
       accountId = active;
-      linkedAccounts = mergedList;
+      linkedAccounts = savedAccounts;
     });
+
+    // Eagerly init local notifications so permission prompt appears early
+    try {
+      await NotificationService().init();
+    } catch (_) {}
 
     // Best-effort: register this device for push notifications (FCM)
     // so owner/member notifications can be delivered.

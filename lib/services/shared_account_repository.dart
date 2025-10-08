@@ -39,6 +39,10 @@ class SharedAccountRepository {
   CollectionReference<Map<String, dynamic>> get _joinRequestsCol =>
       _accountDoc.collection('joinRequests');
 
+  // Audit trail for join requests (history of requested/denied/approved)
+  CollectionReference<Map<String, dynamic>> get _joinRequestsAuditCol =>
+      _accountDoc.collection('joinRequestsAudit');
+
   // Account doc stream
   Stream<Map<String, dynamic>?> accountStream() {
     return _accountDoc.snapshots().map((d) => d.data());
@@ -79,21 +83,43 @@ class SharedAccountRepository {
         'createdAt': FieldValue.serverTimestamp(),
         'lastUpdatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-      // Best-effort: enqueue a client-side inbox item for the owner to see a local notification
+
+      // Audit: log request
+      try {
+        await _joinRequestsAuditCol.add({
+          'action': 'requested',
+          'requestUid': uid,
+          if (displayName != null) 'displayName': displayName,
+          if (email != null) 'email': email,
+          'at': FieldValue.serverTimestamp(),
+        });
+      } catch (_) {}
+      // Best-effort: enqueue client-side inbox items so owners/members see a local notification
+      // This works even without Cloud Functions deployed.
       try {
         final acc = await _accountDoc.get();
-        final ownerUid = (acc.data()?['createdBy'] as String?) ?? '';
-        if (ownerUid.isNotEmpty) {
-          await _db.collection('users').doc(ownerUid).collection('inbox').add({
-            'type': 'join_request',
-            'accountId': accountId,
-            'requestUid': uid,
-            'title': 'Join request received',
-            'body':
-                '${displayName ?? email ?? uid} requested to join $accountId.',
-            'acknowledged': false,
-            'createdAt': FieldValue.serverTimestamp(),
-          });
+        final data = acc.data() ?? <String, dynamic>{};
+        final ownerUid = (data['createdBy'] as String?) ?? '';
+        final members = List<String>.from(
+          (data['members'] as List?) ?? const [],
+        );
+        final targets = <String>{};
+        if (ownerUid.isNotEmpty) targets.add(ownerUid);
+        targets.addAll(members);
+        targets.remove(uid); // don't notify requester
+        for (final t in targets) {
+          try {
+            await _db.collection('users').doc(t).collection('inbox').add({
+              'type': 'join_request',
+              'accountId': accountId,
+              'requestUid': uid,
+              'title': 'Join request received',
+              'body':
+                  '${displayName ?? email ?? uid} requested to join $accountId.',
+              'acknowledged': false,
+              'createdAt': FieldValue.serverTimestamp(),
+            });
+          } catch (_) {}
         }
       } catch (_) {}
     } on FirebaseException catch (e) {
@@ -229,11 +255,45 @@ class SharedAccountRepository {
 
   // Owner: approve/deny a join request
   Future<void> setJoinRequestStatus(String requestUid, String status) async {
-    await _joinRequestsCol.doc(requestUid).set({
-      'status': status,
-      'lastUpdatedAt': FieldValue.serverTimestamp(),
-      'actedBy': uid,
-    }, SetOptions(merge: true));
+    final ref = _joinRequestsCol.doc(requestUid);
+    if (status == 'denied') {
+      // Audit: log denial before delete
+      try {
+        await _joinRequestsAuditCol.add({
+          'action': 'denied',
+          'requestUid': requestUid,
+          'actedBy': uid,
+          'at': FieldValue.serverTimestamp(),
+        });
+      } catch (_) {}
+      // Delete the request so the requester can send a fresh one later
+      // (avoids rules that may block requesters from updating after a denial)
+      try {
+        await ref.delete();
+      } on FirebaseException catch (_) {
+        // Fallback: mark as denied if delete is blocked, but still attempt to allow re-request
+        await ref.set({
+          'status': 'denied',
+          'lastUpdatedAt': FieldValue.serverTimestamp(),
+          'actedBy': uid,
+        }, SetOptions(merge: true));
+      }
+    } else {
+      await ref.set({
+        'status': status,
+        'lastUpdatedAt': FieldValue.serverTimestamp(),
+        'actedBy': uid,
+      }, SetOptions(merge: true));
+      // Audit: log generic status set
+      try {
+        await _joinRequestsAuditCol.add({
+          'action': status,
+          'requestUid': requestUid,
+          'actedBy': uid,
+          'at': FieldValue.serverTimestamp(),
+        });
+      } catch (_) {}
+    }
   }
 
   // Fallback (no Cloud Functions): owner approves and directly adds member.
@@ -277,6 +337,16 @@ class SharedAccountRepository {
         'lastAccessAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     });
+
+    // Audit: log approval
+    try {
+      await _joinRequestsAuditCol.add({
+        'action': 'approved',
+        'requestUid': requestUid,
+        'actedBy': uid,
+        'at': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {}
   }
 
   // Requester: check own request status

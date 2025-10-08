@@ -15,7 +15,6 @@ import 'services/local_receipt_service.dart';
 import 'services/receipt_backup_service.dart';
 import 'services/android_downloads_service.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'features/home/home_tab.dart';
 import 'features/expenses/expenses_tab.dart';
 import 'features/savings/savings_tab.dart';
@@ -90,7 +89,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _accOwnerSub;
   final Set<String> _accMemberIds = {};
   final Set<String> _accOwnerIds = {};
-  String? _uid;
+  // no longer store uid locally; we don't overwrite per-user Hive keys from live sync
   StreamSubscription<String>? _notifTapSub;
   void _scheduleTapAutosave() {
     _tapAutosave?.cancel();
@@ -100,28 +99,27 @@ class _MainTabsPageState extends State<MainTabsPage> {
     });
   }
 
-  // Returns a UI-only merged list of accounts from current user's list
-  // plus any other users' lists and the legacy global list stored on this device.
+  // Aggregate accounts for UI display without mutating persisted per-user lists.
+  // Union of:
+  // - per-user saved list (base)
+  // - live Firestore membership/owner sets
+  // - device-known cache (best-effort)
+  // Ensures current active account is included.
   List<String> _aggregateAccountsForUi(List<String> base) {
-    final merged = <String>{...base.whereType<String>()};
-    // Include device-wide known accounts bucket
-    final deviceKnown = box.get('linkedAccounts_device');
-    if (deviceKnown is List && deviceKnown.isNotEmpty) {
-      merged.addAll(deviceKnown.whereType<String>());
-    }
-    for (final k in box.keys) {
-      if (k is String && k.startsWith('linkedAccounts_')) {
-        final v = box.get(k);
-        if (v is List && v.isNotEmpty) {
-          merged.addAll(v.whereType<String>());
-        }
+    final set = <String>{...base.whereType<String>()};
+    // Add live membership/owner ids (if streams are active)
+    set.addAll(_accMemberIds);
+    set.addAll(_accOwnerIds);
+    // Add device-wide known accounts as a soft fallback
+    try {
+      final dev = box.get('linkedAccounts_device');
+      if (dev is List && dev.isNotEmpty) {
+        set.addAll(dev.whereType<String>());
       }
-    }
-    final legacy = box.get('linkedAccounts');
-    if (legacy is List && legacy.isNotEmpty) {
-      merged.addAll(legacy.whereType<String>());
-    }
-    final list = merged.toList()..sort();
+    } catch (_) {}
+    // Ensure current active account is present
+    if (widget.accountId.isNotEmpty) set.add(widget.accountId);
+    final list = set.toList()..sort();
     return list;
   }
 
@@ -484,7 +482,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
     // Load linked accounts list from Hive for account switcher
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return; // guarded by login flow
-    _uid = user.uid;
+    // uid available from FirebaseAuth.instance.currentUser; no local field needed
     // Use per-user keys with migration from legacy globals
     final uid = user.uid;
     final linkedKey = 'linkedAccounts_$uid';
@@ -504,24 +502,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
         _linkedAccounts = [widget.accountId];
         box.put(linkedKey, _linkedAccounts);
       }
-      // Aggregate accounts from other known users on this device (UI-only)
-      final merged = <String>{..._linkedAccounts};
-      for (final k in box.keys) {
-        if (k is String && k.startsWith('linkedAccounts_')) {
-          final v = box.get(k);
-          if (v is List && v.isNotEmpty) {
-            merged.addAll(v.whereType<String>());
-          }
-        }
-      }
-      final legacy = box.get('linkedAccounts');
-      if (legacy is List && legacy.isNotEmpty) {
-        merged.addAll(legacy.whereType<String>());
-      }
-      if (merged.isNotEmpty && merged.length != _linkedAccounts.length) {
-        _linkedAccounts = merged.toList()..sort();
-        // Do NOT overwrite the per-user key here; this is UI-only aggregation.
-      }
+      // Do NOT aggregate other users' lists here; keep per-user only.
     }
     // Update device-wide known accounts set (never cleared on sign-out)
     final deviceKey = 'linkedAccounts_device';
@@ -1066,24 +1047,26 @@ class _MainTabsPageState extends State<MainTabsPage> {
   }
 
   void _refreshLinkedAccountsCache() {
-    final uid = _uid;
-    if (uid == null) return;
-    final arr = {..._accMemberIds, ..._accOwnerIds}.toList()..sort();
-    // If streams returned empty (common during dev when App Check/rules block),
-    // don't wipe out the existing local list; preserve last known non-empty.
-    if (arr.isEmpty) {
-      final existing = box.get('linkedAccounts_$uid');
-      if (existing is List && existing.isNotEmpty) {
-        // Keep the current UI list; do not overwrite Hive with empty.
-        setState(() => _linkedAccounts = existing.whereType<String>().toList());
-        return;
+    // Do not overwrite the user's curated list in Hive. We only update
+    // in-memory membership sets via _accMemberIds/_accOwnerIds (already set
+    // by callers) and let _aggregateAccountsForUi() compute the union.
+    // Trigger a rebuild to reflect new union in Switch/Manage.
+    if (!mounted) return;
+    setState(() {});
+    // Optionally refresh device-known cache as a soft superset for UI.
+    try {
+      final devKey = 'linkedAccounts_device';
+      final dev = box.get(devKey);
+      final union = <String>{
+        ..._linkedAccounts,
+        ..._accMemberIds,
+        ..._accOwnerIds,
+        if (dev is List) ...dev.whereType<String>(),
+      };
+      if (union.isNotEmpty) {
+        box.put(devKey, union.toList()..sort());
       }
-      // No existing cache either; leave empty but avoid writing empty redundantly.
-      setState(() => _linkedAccounts = const []);
-      return;
-    }
-    setState(() => _linkedAccounts = arr);
-    box.put('linkedAccounts_$uid', arr);
+    } catch (_) {}
   }
 
   // Merge helper: given an incoming list of rows for a collection, preserve any
@@ -1810,6 +1793,24 @@ class _MainTabsPageState extends State<MainTabsPage> {
             ],
           ),
         ),
+        // Show Active account and Gmail directly under Account section
+        Builder(
+          builder: (context) {
+            final ownerEmail =
+                (_accountDoc?['createdByEmail'] as String?) ?? '';
+            final email = ownerEmail.isNotEmpty
+                ? ownerEmail
+                : (FirebaseAuth.instance.currentUser?.email ?? '—');
+            final activeAccountLabel =
+                _accountAliases[widget.accountId] ?? widget.accountId;
+            return ListTile(
+              leading: const Icon(Icons.account_circle_outlined),
+              title: const Text('Active account'),
+              subtitle: Text('$activeAccountLabel\nGmail: $email'),
+              isThreeLine: true,
+            );
+          },
+        ),
         ListTile(
           leading: const Icon(Icons.swap_horiz),
           title: const Text('Switch account'),
@@ -2217,21 +2218,12 @@ class _MainTabsPageState extends State<MainTabsPage> {
           subtitle: const Text('Paste a folder path containing manifest.json'),
           onTap: _importReceiptsPrompt,
         ),
-        FutureBuilder<PackageInfo>(
-          future: PackageInfo.fromPlatform(),
-          builder: (context, snap) {
-            final version = snap.hasData
-                ? '${snap.data!.version} (${snap.data!.buildNumber})'
-                : '…';
-            final email = FirebaseAuth.instance.currentUser?.email ?? '—';
-            return ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('About'),
-              subtitle: Text(
-                'BudgetBuddy • v$version\nDeveloper: Bryan L. Tejano\nActive account: ${_accountAliases[widget.accountId] ?? widget.accountId}\nGmail: $email',
-              ),
-            );
-          },
+        const ListTile(
+          leading: Icon(Icons.info_outline),
+          title: Text('About'),
+          subtitle: Text(
+            'BudgetBuddy • v4.3.2\nDeveloper: Bryan L. Tejano\nGmail: bryantejano@gmail.com',
+          ),
         ),
         ListTile(
           leading: const Icon(Icons.logout),
@@ -2597,21 +2589,6 @@ class _MainTabsPageState extends State<MainTabsPage> {
   void _showAccountSwitcher(BuildContext context) async {
     // final cs = Theme.of(context).colorScheme; // no longer needed (icon removed)
     final list = _aggregateAccountsForUi(_linkedAccounts);
-    // Persist aggregated list into current user's per-user key so future reads match
-    final uid = _uid ?? FirebaseAuth.instance.currentUser?.uid;
-    if (uid != null) {
-      final linkedKey = 'linkedAccounts_$uid';
-      await box.put(linkedKey, list);
-      // Also persist to device-wide bucket
-      final deviceKey = 'linkedAccounts_device';
-      final devVal = box.get(deviceKey);
-      final devSet = <String>{
-        ...list,
-        if (devVal is List) ...devVal.whereType<String>(),
-      };
-      await box.put(deviceKey, devSet.toList()..sort());
-      if (mounted) setState(() => _linkedAccounts = list);
-    }
     // Prefetch owner emails (Gmails) for display
     final Map<String, String> emailMap = {};
     try {
