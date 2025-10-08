@@ -1,5 +1,6 @@
 import org.gradle.api.tasks.Delete
 import org.gradle.api.file.Directory
+import com.android.build.gradle.LibraryExtension
 
 // ✅ Add buildscript block FIRST
 buildscript {
@@ -31,6 +32,20 @@ subprojects {
 
 subprojects {
     project.evaluationDependsOn(":app")
+}
+
+// Workaround: some third-party plugins (e.g., flutter_native_timezone 2.0.0)
+// may miss an AGP 8+ required namespace. Assign one here to unblock builds.
+subprojects {
+    if (name == "flutter_native_timezone") {
+        plugins.withId("com.android.library") {
+            extensions.configure<LibraryExtension>("android") {
+                if (namespace == null || namespace!!.isBlank()) {
+                    namespace = "dev.fluttercommunity.flutter_native_timezone"
+                }
+            }
+        }
+    }
 }
 
 tasks.register<Delete>("clean") {

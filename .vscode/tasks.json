@@ -228,6 +228,55 @@
 			],
 			"isBackground": false,
 			"group": "build"
+		},
+		{
+			"label": "Flutter Pub Get",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"pub",
+				"get"
+			],
+			"problemMatcher": [
+				"$dart-pub"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Flutter Analyze BudgetBuddy",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"analyze",
+				"--no-pub"
+			]
+		},
+		{
+			"label": "Flutter Analyze BudgetBuddy",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"analyze",
+				"--no-pub"
+			]
+		},
+		{
+			"label": "Flutter Analyze BudgetBuddy",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"analyze",
+				"--no-pub"
+			]
+		},
+		{
+			"label": "Flutter Analyze BudgetBuddy",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"analyze",
+				"--no-pub"
+			]
 		}
 	]
 }

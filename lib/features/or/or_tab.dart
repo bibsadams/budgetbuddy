@@ -11,6 +11,7 @@ import 'package:budgetbuddy/features/expenses/receipt_gallery_page.dart';
 import 'package:hive/hive.dart';
 import 'package:budgetbuddy/services/local_receipt_service.dart';
 import 'dart:ui';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class OrTab extends StatefulWidget {
   final List<Map<String, dynamic>> rows;
@@ -651,7 +652,10 @@ class _OrDetailsPageState extends State<OrDetailsPage> {
       if (uids.isEmpty) return;
 
       final box = Hive.box('budgetBox');
-      final accountId = (box.get('accountId') ?? '') as String;
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      final perUserKey = uid != null ? 'accountId_$uid' : 'accountId';
+      final accountId =
+          (box.get(perUserKey) ?? box.get('accountId') ?? '') as String;
       if (accountId.isEmpty) return;
 
       for (final uid in uids) {

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'services/shared_account_repository.dart';
+import 'services/notification_service.dart';
 
 class ManageAccountsPage extends StatefulWidget {
   const ManageAccountsPage({super.key});
@@ -64,7 +66,8 @@ class _ManageAccountsPageState extends State<ManageAccountsPage> {
       );
       if (uid != null && aliases.isNotEmpty) box.put(aliasesKey, aliases);
     }
-    active = box.get(activeKey) as String? ?? box.get('accountId') as String?;
+    final legacyActive = box.get('accountId') as String?;
+    active = box.get(activeKey) as String? ?? legacyActive;
   }
 
   @override
@@ -193,6 +196,79 @@ class _ManageAccountsPageState extends State<ManageAccountsPage> {
               ],
             ),
           );
+        },
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        icon: const Icon(Icons.add),
+        label: const Text('Add account'),
+        onPressed: () async {
+          final ctrl = TextEditingController();
+          final id = await showDialog<String>(
+            context: context,
+            builder: (d) => AlertDialog(
+              title: const Text('Add account ID'),
+              content: TextField(
+                controller: ctrl,
+                decoration: const InputDecoration(hintText: 'BB-ABCD-1234'),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(d),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(d, ctrl.text.trim()),
+                  child: const Text('Add'),
+                ),
+              ],
+            ),
+          );
+          if (id != null && id.isNotEmpty) {
+            setState(() {
+              if (!accounts.contains(id)) {
+                accounts.add(id);
+                accounts.sort();
+                final uid = FirebaseAuth.instance.currentUser?.uid;
+                final linkedKey = uid != null
+                    ? 'linkedAccounts_$uid'
+                    : 'linkedAccounts';
+                box.put(linkedKey, accounts);
+                // Update device-wide bucket for aggregation
+                final deviceKey = 'linkedAccounts_device';
+                final devSet = <String>{
+                  ...accounts,
+                  if (box.get(deviceKey) is List)
+                    ...List<String>.from(box.get(deviceKey)),
+                };
+                box.put(deviceKey, devSet.toList()..sort());
+              }
+            });
+            // Best-effort: ensure membership remotely to trigger notifications
+            try {
+              final user = FirebaseAuth.instance.currentUser;
+              final uid = user?.uid;
+              if (uid != null) {
+                final repo = SharedAccountRepository(accountId: id, uid: uid);
+                await repo.ensureMembership(
+                  displayName: user?.displayName,
+                  email: user?.email,
+                );
+              }
+            } catch (_) {}
+            // Immediate local feedback notification
+            try {
+              await NotificationService().showNow(
+                DateTime.now().millisecondsSinceEpoch & 0x7fffffff,
+                title: 'Account added',
+                body: 'You added account $id',
+              );
+            } catch (_) {}
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Account added locally.')),
+              );
+            }
+          }
         },
       ),
     );

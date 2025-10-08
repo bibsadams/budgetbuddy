@@ -11,6 +11,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:convert';
 import 'package:budgetbuddy/services/local_receipt_service.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class ReceiptGalleryPage extends StatefulWidget {
   final List<Map<String, dynamic>> rows;
@@ -423,7 +424,10 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
       final box = Hive.isBoxOpen('budgetBox')
           ? Hive.box('budgetBox')
           : await Hive.openBox('budgetBox');
-      final accountId = (box.get('accountId') ?? '') as String;
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      final perUserKey = uid != null ? 'accountId_$uid' : 'accountId';
+      final accountId =
+          (box.get(perUserKey) ?? box.get('accountId') ?? '') as String;
       if (accountId.isEmpty) {
         try {
           debugPrint(
@@ -516,7 +520,9 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
       final box = Hive.isBoxOpen('budgetBox')
           ? Hive.box('budgetBox')
           : await Hive.openBox('budgetBox');
-      final accountId = (box.get('accountId') ?? '') as String;
+      final uid2 = FirebaseAuth.instance.currentUser?.uid;
+      final k2 = uid2 != null ? 'accountId_$uid2' : 'accountId';
+      final accountId = (box.get(k2) ?? box.get('accountId') ?? '') as String;
       final haveAccountId = accountId.isNotEmpty;
       // Debug: collect all uids we'll attempt to resolve and log them
       try {
@@ -724,7 +730,9 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
       final box = Hive.isBoxOpen('budgetBox')
           ? Hive.box('budgetBox')
           : await Hive.openBox('budgetBox');
-      final accountId = (box.get('accountId') ?? '') as String;
+      final uid3 = FirebaseAuth.instance.currentUser?.uid;
+      final k3 = uid3 != null ? 'accountId_$uid3' : 'accountId';
+      final accountId = (box.get(k3) ?? box.get('accountId') ?? '') as String;
       debugPrint('receipt debug: budgetBox.accountId=$accountId');
       debugPrint('receipt debug: budgetBox.keys=${box.keys}');
 
@@ -1093,7 +1101,10 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
         final box = Hive.isBoxOpen('budgetBox')
             ? Hive.box('budgetBox')
             : await Hive.openBox('budgetBox');
-        final accountIdRaw = (box.get('accountId') ?? '') as String;
+        final uid4 = FirebaseAuth.instance.currentUser?.uid;
+        final k4 = uid4 != null ? 'accountId_$uid4' : 'accountId';
+        final accountIdRaw =
+            (box.get(k4) ?? box.get('accountId') ?? '') as String;
         final accountId = accountIdRaw.isNotEmpty
             ? accountIdRaw
             : 'unknown_account';
@@ -1303,7 +1314,10 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
           final box = Hive.isBoxOpen('budgetBox')
               ? Hive.box('budgetBox')
               : await Hive.openBox('budgetBox');
-          final accountId = (box.get('accountId') ?? '') as String;
+          final uid5 = FirebaseAuth.instance.currentUser?.uid;
+          final k5 = uid5 != null ? 'accountId_$uid5' : 'accountId';
+          final accountId =
+              (box.get(k5) ?? box.get('accountId') ?? '') as String;
           if (accountId.isNotEmpty) {
             // If the row has ReceiptUids, try to find which uid maps to this path and delete it.
             if (r['ReceiptUids'] is List) {
@@ -1439,7 +1453,10 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
           final box = Hive.isBoxOpen('budgetBox')
               ? Hive.box('budgetBox')
               : await Hive.openBox('budgetBox');
-          final accountId = (box.get('accountId') ?? '') as String;
+          final uid6 = FirebaseAuth.instance.currentUser?.uid;
+          final k6 = uid6 != null ? 'accountId_$uid6' : 'accountId';
+          final accountId =
+              (box.get(k6) ?? box.get('accountId') ?? '') as String;
           final ulist = List<String>.from(
             (r['ReceiptUids'] as List).whereType<String>(),
           );
@@ -1588,7 +1605,10 @@ class _ReceiptGalleryPageState extends State<ReceiptGalleryPage> {
             final box = Hive.isBoxOpen('budgetBox')
                 ? Hive.box('budgetBox')
                 : await Hive.openBox('budgetBox');
-            final accountId = (box.get('accountId') ?? '') as String;
+            final uid7 = FirebaseAuth.instance.currentUser?.uid;
+            final k7 = uid7 != null ? 'accountId_$uid7' : 'accountId';
+            final accountId =
+                (box.get(k7) ?? box.get('accountId') ?? '') as String;
             if (accountId.isNotEmpty) {
               for (final uid in prevUids) {
                 final expected = await LocalReceiptService().pathForReceiptUid(

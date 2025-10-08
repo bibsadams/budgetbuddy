@@ -43,7 +43,7 @@ flutter {
 
 dependencies {
     // ✅ Enables modern Java APIs
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 
     // ✅ Optional native Firebase Auth & Google Sign-In (not required for Flutter plugins)
     implementation("com.google.firebase:firebase-auth-ktx:22.1.2")

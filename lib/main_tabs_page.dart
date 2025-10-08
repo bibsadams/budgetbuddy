@@ -1774,7 +1774,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
               const Spacer(),
               FilledButton.icon(
                 onPressed: () {
-                  // Reuse the same flow as Add Account sheet previously
+                  // Open inline add account flow; target account will be validated
                   _showAddAccountInline(context);
                 },
                 icon: const Icon(Icons.add_circle_outline),
@@ -2595,7 +2595,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
   }
 
   void _showAccountSwitcher(BuildContext context) async {
-    final cs = Theme.of(context).colorScheme;
+    // final cs = Theme.of(context).colorScheme; // no longer needed (icon removed)
     final list = _aggregateAccountsForUi(_linkedAccounts);
     // Persist aggregated list into current user's per-user key so future reads match
     final uid = _uid ?? FirebaseAuth.instance.currentUser?.uid;
@@ -2612,6 +2612,45 @@ class _MainTabsPageState extends State<MainTabsPage> {
       await box.put(deviceKey, devSet.toList()..sort());
       if (mounted) setState(() => _linkedAccounts = list);
     }
+    // Prefetch owner emails (Gmails) for display
+    final Map<String, String> emailMap = {};
+    try {
+      final futures = list.map((id) async {
+        try {
+          final snap = await FirebaseFirestore.instance
+              .collection('accounts')
+              .doc(id)
+              .get();
+          final data = snap.data();
+          String email =
+              (data != null ? (data['createdByEmail'] as String?) : null) ?? '';
+          // Optional: if missing, attempt to read creator's member profile email
+          if (email.isEmpty) {
+            final createdBy = data != null
+                ? (data['createdBy'] as String?)
+                : null;
+            if (createdBy != null && createdBy.isNotEmpty) {
+              try {
+                final mem = await FirebaseFirestore.instance
+                    .collection('accounts')
+                    .doc(id)
+                    .collection('members')
+                    .doc(createdBy)
+                    .get();
+                final md = mem.data();
+                final mEmail = md != null ? (md['email'] as String?) : null;
+                if (mEmail != null && mEmail.isNotEmpty) email = mEmail;
+              } catch (_) {}
+            }
+          }
+          emailMap[id] = email;
+        } catch (_) {
+          emailMap[id] = '';
+        }
+      }).toList();
+      await Future.wait(futures);
+    } catch (_) {}
+
     final selected = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2625,8 +2664,10 @@ class _MainTabsPageState extends State<MainTabsPage> {
               final id = list[i];
               final isActive = id == widget.accountId;
               return ListTile(
-                leading: Icon(Icons.credit_card, color: cs.primary),
                 title: Text(id),
+                subtitle: (emailMap[id] != null && emailMap[id]!.isNotEmpty)
+                    ? Text(emailMap[id]!)
+                    : null,
                 trailing: isActive
                     ? const Icon(Icons.check_circle, color: Colors.green)
                     : null,
@@ -2665,7 +2706,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
                 textCapitalization: TextCapitalization.characters,
                 decoration: const InputDecoration(
                   labelText: 'Account number',
-                  hintText: 'BB-ABCD-1234 or BB-PERS-... ',
+                  hintText: 'BB-ABCD-1234',
                   prefixIcon: Icon(Icons.credit_card),
                 ),
               ),
@@ -2705,9 +2746,18 @@ class _MainTabsPageState extends State<MainTabsPage> {
                           accountId: id,
                           uid: user.uid,
                         );
-                        // Validate account
+                        // Validate account and require Joint Access on the TARGET account
                         final acc = await repo.getAccountOnce();
                         if (acc == null) throw 'Account not found';
+                        final targetIsJoint =
+                            (acc['isJoint'] as bool?) ?? false;
+                        if (!targetIsJoint) {
+                          setM(
+                            () => error =
+                                'This account is not Joint. Ask the owner to enable Joint Access.',
+                          );
+                          return;
+                        }
                         final members = List<String>.from(acc['members'] ?? []);
                         final myUid = user.uid;
                         if (members.contains(myUid)) {
@@ -2780,9 +2830,7 @@ class _MainTabsPageState extends State<MainTabsPage> {
                         if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                              content: Text(
-                                'Request Add Account status: Pending. You\'ll be added automatically once approved.',
-                              ),
+                              content: Text('Request sent. Awaiting approval.'),
                               duration: Duration(seconds: 5),
                             ),
                           );
@@ -2805,6 +2853,11 @@ class _MainTabsPageState extends State<MainTabsPage> {
   // Removed unused _showAddAccountSheet after moving Add Account to Settings.
 
   void _openAccount(String id) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      box.put('accountId_$uid', id);
+    }
+    // Keep legacy/global key for parts of the app that still read it
     box.put('accountId', id);
     if (!mounted) return;
     Navigator.of(context).pushReplacement(

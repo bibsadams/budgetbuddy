@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'main_tabs_page.dart';
 import 'widgets/app_gradient_background.dart';
@@ -16,6 +17,9 @@ import 'services/auth_service.dart';
 import 'services/firebase_service.dart';
 import 'services/shared_account_repository.dart';
 import 'services/notification_service.dart';
+import 'services/push_messaging_service.dart';
+import 'services/inbox_service.dart';
+import 'services/join_request_watcher.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,6 +29,8 @@ void main() async {
   await Hive.openBox('budgetBox');
   // Prepare local notifications (channels, permissions)
   await NotificationService().init();
+  // Register background handler for FCM (must be a top-level or static function)
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
   runApp(const MyApp());
 }
 
@@ -214,18 +220,29 @@ class _MyAppState extends State<MyApp> {
 
         // Ensure an accountNumber exists on the chosen doc
         if (accountNumber.isEmpty) {
-          String genSuffix(int n) {
-            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+          String genLetters(int n) {
+            const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
             final r = Random();
             return String.fromCharCodes(
               List.generate(
                 n,
-                (_) => chars.codeUnitAt(r.nextInt(chars.length)),
+                (_) => letters.codeUnitAt(r.nextInt(letters.length)),
               ),
             );
           }
 
-          accountNumber = 'BB-${genSuffix(6)}-0001';
+          String genDigits(int n) {
+            const digits = '0123456789';
+            final r = Random();
+            return String.fromCharCodes(
+              List.generate(
+                n,
+                (_) => digits.codeUnitAt(r.nextInt(digits.length)),
+              ),
+            );
+          }
+
+          accountNumber = 'BB-${genLetters(4)}-${genDigits(4)}';
           await chosen.reference.set({
             'accountNumber': accountNumber,
           }, SetOptions(merge: true));
@@ -267,19 +284,29 @@ class _MyAppState extends State<MyApp> {
       } else {
         // No user doc exists for this email; enforce canonical mapping via transaction
         String ensureAccountNumber() {
-          String genSuffix(int n) {
-            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+          String genLetters(int n) {
+            const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
             final r = Random();
             return String.fromCharCodes(
               List.generate(
                 n,
-                (_) => chars.codeUnitAt(r.nextInt(chars.length)),
+                (_) => letters.codeUnitAt(r.nextInt(letters.length)),
               ),
             );
           }
 
-          final acc = 'BB-${genSuffix(6)}-0001';
-          return acc;
+          String genDigits(int n) {
+            const digits = '0123456789';
+            final r = Random();
+            return String.fromCharCodes(
+              List.generate(
+                n,
+                (_) => digits.codeUnitAt(r.nextInt(digits.length)),
+              ),
+            );
+          }
+
+          return 'BB-${genLetters(4)}-${genDigits(4)}';
         }
 
         // Case A: Mapping exists -> create/repair the mapped user doc atomically
@@ -442,9 +469,27 @@ class _MyAppState extends State<MyApp> {
         }
       }
     } catch (_) {
-      // Firestore may be unreachable; fall back to a deterministic local number
-      final sub = uid.length >= 6 ? uid.substring(0, 6) : uid;
-      accountNumber = 'BB-$sub-0001';
+      // Firestore may be unreachable; fall back to a random number with the standard format
+      String genLetters(int n) {
+        const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+        final r = Random();
+        return String.fromCharCodes(
+          List.generate(
+            n,
+            (_) => letters.codeUnitAt(r.nextInt(letters.length)),
+          ),
+        );
+      }
+
+      String genDigits(int n) {
+        const digits = '0123456789';
+        final r = Random();
+        return String.fromCharCodes(
+          List.generate(n, (_) => digits.codeUnitAt(r.nextInt(digits.length))),
+        );
+      }
+
+      accountNumber = 'BB-${genLetters(4)}-${genDigits(4)}';
     }
 
     // 2) Load existing accounts for this user; include personal accountNumber
@@ -572,6 +617,20 @@ class _MyAppState extends State<MyApp> {
       accountId = active;
       linkedAccounts = mergedList;
     });
+
+    // Best-effort: register this device for push notifications (FCM)
+    // so owner/member notifications can be delivered.
+    try {
+      await PushMessagingService().registerTokenIfPossible();
+    } catch (_) {}
+    // Start inbox listener for owner/member events (no Functions required)
+    try {
+      await InboxService().startForCurrentUser();
+    } catch (_) {}
+    // Start direct join-request watcher for accounts you own
+    try {
+      await JoinRequestWatcher().startForCurrentUser();
+    } catch (_) {}
 
     // Reset navigation to main tabs
     _navKey.currentState?.pushAndRemoveUntil(

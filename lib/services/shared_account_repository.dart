@@ -79,6 +79,23 @@ class SharedAccountRepository {
         'createdAt': FieldValue.serverTimestamp(),
         'lastUpdatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      // Best-effort: enqueue a client-side inbox item for the owner to see a local notification
+      try {
+        final acc = await _accountDoc.get();
+        final ownerUid = (acc.data()?['createdBy'] as String?) ?? '';
+        if (ownerUid.isNotEmpty) {
+          await _db.collection('users').doc(ownerUid).collection('inbox').add({
+            'type': 'join_request',
+            'accountId': accountId,
+            'requestUid': uid,
+            'title': 'Join request received',
+            'body':
+                '${displayName ?? email ?? uid} requested to join $accountId.',
+            'acknowledged': false,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+        }
+      } catch (_) {}
     } on FirebaseException catch (e) {
       // Fallback: write to a global collection so Cloud Functions can still send an email
       if (e.code == 'permission-denied') {

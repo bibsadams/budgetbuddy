@@ -2,8 +2,14 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     // WARNING: Permissive rules for debugging only. All users can read and write everything.
+    // NOTE: When hardening, prefer more specific rules like the ones below and remove the global allow.
     match /{document=**} {
       allow read, write: if true;
     }
+
+    // Example hardened rule to allow users to manage their own FCM tokens
+    // match /users/{uid}/tokens/{tokenId} {
+    //   allow read, write: if request.auth != null && request.auth.uid == uid;
+    // }
   }
 }

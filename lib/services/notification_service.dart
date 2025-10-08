@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest_all.dart' as tzdata;
+import 'package:flutter_timezone/flutter_timezone.dart';
 
 enum RepeatIntervalMode { none, weekly, monthly, yearly }
 
@@ -21,6 +22,13 @@ class NotificationService {
   Future<void> init() async {
     if (_initialized) return;
     tzdata.initializeTimeZones();
+    try {
+      final info = await FlutterTimezone.getLocalTimezone();
+      final name = (info as dynamic).name as String? ?? info.toString();
+      tz.setLocalLocation(tz.getLocation(name));
+    } catch (_) {
+      // Fallback: keep default local
+    }
 
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosInit = DarwinInitializationSettings();
@@ -122,9 +130,7 @@ class NotificationService {
             body,
             tzTime,
             details,
-            androidScheduleMode: AndroidScheduleMode.inexact,
-            uiLocalNotificationDateInterpretation:
-                UILocalNotificationDateInterpretation.absoluteTime,
+            androidScheduleMode: AndroidScheduleMode.exact,
             matchDateTimeComponents: null,
             payload: payload,
           );
@@ -136,9 +142,7 @@ class NotificationService {
             body,
             _nextWeekly(tzTime),
             details,
-            androidScheduleMode: AndroidScheduleMode.inexact,
-            uiLocalNotificationDateInterpretation:
-                UILocalNotificationDateInterpretation.absoluteTime,
+            androidScheduleMode: AndroidScheduleMode.exact,
             matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
             payload: payload,
           );
@@ -150,9 +154,7 @@ class NotificationService {
             body,
             _nextMonthly(tzTime),
             details,
-            androidScheduleMode: AndroidScheduleMode.inexact,
-            uiLocalNotificationDateInterpretation:
-                UILocalNotificationDateInterpretation.absoluteTime,
+            androidScheduleMode: AndroidScheduleMode.exact,
             matchDateTimeComponents: DateTimeComponents.dayOfMonthAndTime,
             payload: payload,
           );
@@ -164,9 +166,7 @@ class NotificationService {
             body,
             _nextYearly(tzTime),
             details,
-            androidScheduleMode: AndroidScheduleMode.inexact,
-            uiLocalNotificationDateInterpretation:
-                UILocalNotificationDateInterpretation.absoluteTime,
+            androidScheduleMode: AndroidScheduleMode.exact,
             matchDateTimeComponents: DateTimeComponents.dateAndTime,
             payload: payload,
           );

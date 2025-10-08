@@ -615,8 +615,18 @@ class _BillsTabState extends State<BillsTab> {
             minute,
           );
 
-    // Configurable notifications per day at fixed local times to avoid crossing midnight
-    const allSlots = <int>[9, 11, 13, 15, 17, 19, 21, 23]; // hours
+    // Configurable notifications per day at fixed local times to avoid crossing midnight.
+    // Use daytime slots compatible with PH time. Adjust here if you prefer different windows.
+    const allSlots = <int>[
+      9,
+      10,
+      12,
+      14,
+      16,
+      18,
+      20,
+      21,
+    ]; // hours in local time
     final remindersPerDay = (bill['RemindersPerDay'] is num)
         ? (bill['RemindersPerDay'] as num).clamp(0, 8).toInt()
         : 8;
@@ -647,6 +657,7 @@ class _BillsTabState extends State<BillsTab> {
 
       for (int slot = 0; slot < dailySlots.length; slot++) {
         final slotHour = dailySlots[slot];
+        // Align minutes to 0 so the reminders are predictable within the hour.
         final dt = DateTime(d.year, d.month, d.day, slotHour, 0);
         if (dt.isAfter(now)) {
           final id = base + (dayIndex * dailySlots.length) + slot;
@@ -663,7 +674,20 @@ class _BillsTabState extends State<BillsTab> {
       dayIndex++;
     }
 
-    // Also schedule the main due-time notification with optional repeat rule
+    // Also schedule the main due-time notification with optional repeat rule.
+    // Clamp to non-sleep hours (morning/afternoon/early night) to avoid late-night pushes.
+    const earliestHour = 9; // 9 AM
+    const latestHour = 21; // 9 PM
+    DateTime dueClamped;
+    if (due.hour < earliestHour) {
+      dueClamped = DateTime(due.year, due.month, due.day, earliestHour, 0);
+    } else if (due.hour > latestHour) {
+      dueClamped = DateTime(due.year, due.month, due.day, latestHour, 0);
+    } else {
+      // keep the due minute if within allowed window
+      dueClamped = DateTime(due.year, due.month, due.day, due.hour, due.minute);
+    }
+
     final finalTitle = 'Bill due: $name';
     final finalBody =
         '${NumberFormat.currency(symbol: '₱', decimalDigits: 2).format(amount)} due on $dateStr at $timeStr';
@@ -672,7 +696,7 @@ class _BillsTabState extends State<BillsTab> {
       _notifIdFromIndex(index) + 999,
       title: finalTitle,
       body: finalBody,
-      firstDateTime: due,
+      firstDateTime: dueClamped,
       repeat: repeat,
       payload: billId.isNotEmpty ? 'bill:$billId' : 'bill:$name',
     );
